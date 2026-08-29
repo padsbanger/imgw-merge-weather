@@ -12,43 +12,45 @@ The application should become useful as a live weather viewer before advanced au
 
 # Milestone 0 — Repository Foundation
 
+**Status:** Complete (2026-08-29)
+
 ## Goal
 
 Create a clean monorepo foundation for React/Vite and FastAPI.
 
 ## Deliverables
 
-- [ ] `backend/`
-- [ ] `frontend/`
-- [ ] `data/`
-- [ ] root `Dockerfile`
-- [ ] root `docker-compose.yml`
-- [ ] root `Makefile`
-- [ ] `.env.example`
-- [ ] `.gitignore`
-- [ ] `README.md`
-- [ ] `AGENTS.md`
-- [ ] `MILESTONES.md`
-- [ ] `DESIGN.md`
+- [x] `backend/`
+- [x] `frontend/`
+- [x] `data/`
+- [x] root `Dockerfile`
+- [x] root `docker-compose.yml`
+- [x] root `Makefile`
+- [x] `.env.example`
+- [x] `.gitignore`
+- [x] `README.md`
+- [x] `AGENTS.md`
+- [x] `MILESTONES.md`
+- [x] `DESIGN.md`
 
 Backend:
 
-- [ ] Python 3.12 project
-- [ ] FastAPI
-- [ ] pydantic-settings
-- [ ] Ruff
-- [ ] pytest
+- [x] Python 3.12 project
+- [x] FastAPI
+- [x] pydantic-settings
+- [x] Ruff
+- [x] pytest
 
 Frontend:
 
-- [ ] React
-- [ ] TypeScript strict mode
-- [ ] Vite
-- [ ] TanStack Query
-- [ ] React Router
-- [ ] ESLint
-- [ ] Vitest
-- [ ] React Testing Library
+- [x] React
+- [x] TypeScript strict mode
+- [x] Vite
+- [x] TanStack Query
+- [x] React Router
+- [x] ESLint
+- [x] Vitest
+- [x] React Testing Library
 
 ## Acceptance Criteria
 
@@ -73,23 +75,25 @@ passes.
 
 # Milestone 1 — IMGW MERGE Client
 
+**Status:** Complete (2026-08-29)
+
 ## Goal
 
 Reliably construct and retrieve individual MERGE forecast frames.
 
 ## Deliverables
 
-- [ ] `ImgwMergeClient`
-- [ ] configurable IMGW base URL
-- [ ] exact filename generator
-- [ ] GET requests with browser-compatible headers
-- [ ] timeout handling
-- [ ] retry logic
-- [ ] exponential backoff
-- [ ] conservative concurrency
-- [ ] image-body validation
-- [ ] atomic writes
-- [ ] lightweight `check-imgw` CLI command
+- [x] `ImgwMergeClient`
+- [x] configurable IMGW base URL
+- [x] exact filename generator
+- [x] GET requests with browser-compatible headers
+- [x] timeout handling
+- [x] retry logic
+- [x] exponential backoff
+- [x] conservative concurrency
+- [x] image-body validation
+- [x] atomic writes
+- [x] lightweight `check-imgw` CLI command
 
 Known URL pattern:
 
@@ -99,17 +103,22 @@ https://cmm.imgw.pl/wp-content/uploads/production/MERGE/MERGE_MERGE_10_YYYY-MM-D
 
 ## Tests
 
-- [ ] timestamp formatting
-- [ ] exact URL generation
-- [ ] valid JPEG
-- [ ] corrupt JPEG
-- [ ] HTML response with HTTP 200
-- [ ] empty response
-- [ ] timeout/retry behavior
+- [x] timestamp formatting
+- [x] exact URL generation
+- [x] valid JPEG
+- [x] corrupt JPEG
+- [x] HTML response with HTTP 200
+- [x] empty response
+- [x] timeout/retry behavior
 
 ## Acceptance Criteria
 
 A single known frame can be downloaded and verified without involving FFmpeg.
+
+Verified live on 2026-08-29 with one GET for
+`MERGE_MERGE_10_2026-08-29_11_00_00.jpg`: HTTP 200, JPEG, 455588 bytes,
+1700×1600 pixels. This confirms individual-frame retrieval only; filename timezone
+semantics remain a Milestone 2 validation item.
 
 ---
 
