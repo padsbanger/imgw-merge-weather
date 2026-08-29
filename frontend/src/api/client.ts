@@ -8,8 +8,9 @@ export class ApiError extends Error {
   }
 }
 
-export async function getJson<T>(path: string): Promise<T> {
+async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
+    ...init,
     headers: { Accept: 'application/json' },
   })
 
@@ -20,3 +21,10 @@ export async function getJson<T>(path: string): Promise<T> {
   return (await response.json()) as T
 }
 
+export function getJson<T>(path: string): Promise<T> {
+  return requestJson<T>(path)
+}
+
+export function postJson<T>(path: string): Promise<T> {
+  return requestJson<T>(path, { method: 'POST' })
+}

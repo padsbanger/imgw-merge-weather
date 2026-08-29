@@ -8,6 +8,9 @@ RUN npm run build
 
 FROM python:3.12-slim AS runtime
 
+ARG APP_UID=1000
+ARG APP_GID=1000
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     IMGW_HOST=0.0.0.0 \
@@ -17,7 +20,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN addgroup --system app && adduser --system --ingroup app app \
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && addgroup --system --gid "${APP_GID}" app \
+    && adduser --system --uid "${APP_UID}" --ingroup app app \
     && mkdir -p /data/runs /data/output /data/state \
     && chown -R app:app /data
 

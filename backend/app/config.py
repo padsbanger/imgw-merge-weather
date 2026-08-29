@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -33,6 +34,31 @@ class Settings(BaseSettings):
     min_frame_bytes: int = Field(default=1_024, ge=1)
     min_frame_width: int = Field(default=100, ge=1)
     min_frame_height: int = Field(default=100, ge=1)
+    frame_interval_minutes: int = Field(default=10, ge=1, le=60)
+    forecast_hours: int = Field(default=8, ge=1, le=24)
+    max_start_fallback_steps: int = Field(default=6, ge=0, le=12)
+    allow_missing_frames: bool = False
+    min_frame_coverage: float = Field(default=0.90, ge=0.0, le=1.0)
+    scheduler_enabled: bool = False
+    video_fps: int = Field(default=5, ge=1, le=30)
+    video_codec: Literal["libx264"] = "libx264"
+    video_crf: int = Field(default=20, ge=0, le=51)
+    video_preset: Literal[
+        "ultrafast",
+        "superfast",
+        "veryfast",
+        "faster",
+        "fast",
+        "medium",
+        "slow",
+        "slower",
+        "veryslow",
+    ] = "medium"
+    square_video_size: int = Field(default=1080, ge=240, le=2160, multiple_of=2)
+    min_video_bytes: int = Field(default=1_024, ge=1)
+    video_timeout_seconds: float = Field(default=300, gt=0, le=3_600)
+    ffmpeg_binary: str = "ffmpeg"
+    ffprobe_binary: str = "ffprobe"
 
     @property
     def runs_dir(self) -> Path:
@@ -45,6 +71,10 @@ class Settings(BaseSettings):
     @property
     def state_dir(self) -> Path:
         return self.data_dir / "state"
+
+    @property
+    def database_path(self) -> Path:
+        return self.state_dir / "app.db"
 
     def ensure_data_directories(self) -> None:
         """Create only the known application data directories."""

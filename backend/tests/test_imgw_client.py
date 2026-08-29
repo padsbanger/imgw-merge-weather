@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 
@@ -39,6 +39,14 @@ def test_timestamp_and_filename_formatting_are_exact() -> None:
     assert build_frame_filename(FRAME_TIME) == EXPECTED_FILENAME
 
 
+def test_filename_converts_an_aware_local_time_to_verified_utc() -> None:
+    warsaw_summer_offset = timezone(timedelta(hours=2))
+    local_time = datetime(2026, 8, 29, 14, 50, tzinfo=warsaw_summer_offset)
+
+    assert format_frame_timestamp(local_time) == "2026-08-29_12_50_00"
+    assert build_frame_filename(local_time) == EXPECTED_FILENAME
+
+
 def test_timestamp_formatting_rejects_naive_datetime() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         format_frame_timestamp(datetime(2026, 8, 29, 12, 50))
@@ -64,6 +72,7 @@ async def test_fetches_valid_jpeg_with_browser_compatible_headers() -> None:
 
     assert frame.content == jpeg
     assert frame.metadata.source_url == EXPECTED_URL
+    assert frame.metadata.forecast_time == FRAME_TIME
     assert frame.metadata.size_bytes == len(jpeg)
     assert (frame.metadata.width, frame.metadata.height) == (320, 180)
     assert frame.metadata.image_format == "JPEG"
@@ -187,4 +196,3 @@ async def test_download_writes_validated_frame_atomically(tmp_path: Path) -> Non
     assert metadata.size_bytes == len(jpeg)
     assert list(destination.parent.glob("*.tmp")) == []
     assert list(destination.parent.glob(".*.tmp")) == []
-

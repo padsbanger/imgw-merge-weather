@@ -2,15 +2,22 @@ services:
   imgw-merge-weather:
     build:
       context: .
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
     image: imgw-merge-weather:local
     container_name: imgw-merge-weather
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-8080}:8080"
+      - "${APP_BIND_ADDRESS:-0.0.0.0}:${APP_PORT:-8080}:8080"
     environment:
       IMGW_DATA_DIR: /data
       IMGW_STATIC_DIR: /app/static
       IMGW_LOG_LEVEL: ${IMGW_LOG_LEVEL:-info}
+      IMGW_VIDEO_FPS: ${IMGW_VIDEO_FPS:-5}
+      IMGW_VIDEO_CODEC: ${IMGW_VIDEO_CODEC:-libx264}
+      IMGW_VIDEO_CRF: ${IMGW_VIDEO_CRF:-20}
+      IMGW_VIDEO_PRESET: ${IMGW_VIDEO_PRESET:-medium}
     volumes:
       - ./data:/data
     healthcheck:

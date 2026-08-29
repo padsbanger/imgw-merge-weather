@@ -124,20 +124,22 @@ semantics remain a Milestone 2 validation item.
 
 # Milestone 2 — Time Model and Forecast Sequence
 
+**Status:** Complete (2026-08-29)
+
 ## Goal
 
 Create correct forecast timestamp logic.
 
 ## Deliverables
 
-- [ ] timezone-aware datetime handling
-- [ ] UTC canonical storage
-- [ ] Europe/Warsaw display conversion
-- [ ] `floor_to_interval()`
-- [ ] `build_frame_times()`
-- [ ] latest-cycle probing
-- [ ] configurable fallback
-- [ ] 8-hour / 10-minute forecast sequence
+- [x] timezone-aware datetime handling
+- [x] UTC canonical storage
+- [x] Europe/Warsaw display conversion
+- [x] `floor_to_interval()`
+- [x] `build_frame_times()`
+- [x] latest-cycle probing
+- [x] configurable fallback
+- [x] 8-hour / 10-minute forecast sequence
 
 Default:
 
@@ -157,6 +159,13 @@ Confirm through live IMGW requests whether MERGE filenames use:
 
 Document the verified behavior.
 
+Verified live on 2026-08-29. The file
+`MERGE_MERGE_10_2026-08-29_11_00_00.jpg` visibly labels its valid time as
+`29 August 2026 11:00 UTC`; Warsaw local time was 13:16 CEST. Its embedded model
+start was `10:50Z`, which also confirms that the filename is the frame's UTC valid
+time rather than the publication/model-start identifier. A second file named for
+11:10 visibly labeled the frame 11:10 UTC.
+
 ## Acceptance Criteria
 
 Given a cycle start, the backend generates the exact expected ordered frame sequence.
@@ -164,6 +173,8 @@ Given a cycle start, the backend generates the exact expected ordered frame sequ
 ---
 
 # Milestone 3 — Forecast Run Ingestion
+
+**Status:** Complete (2026-08-29)
 
 ## Goal
 
@@ -173,8 +184,8 @@ Move from individual image downloads to complete forecast-run ingestion.
 
 Create explicit domain models:
 
-- [ ] ForecastRun
-- [ ] ForecastFrame
+- [x] ForecastRun
+- [x] ForecastFrame
 
 Run states:
 
@@ -188,16 +199,16 @@ failed
 
 Store:
 
-- [ ] run ID
-- [ ] discovered timestamp
-- [ ] resolved forecast start
-- [ ] forecast end
-- [ ] expected frames
-- [ ] downloaded frames
-- [ ] missing timestamps
-- [ ] status
-- [ ] error information
-- [ ] manifest
+- [x] run ID
+- [x] discovered timestamp
+- [x] resolved forecast start
+- [x] forecast end
+- [x] expected frames
+- [x] downloaded frames
+- [x] missing timestamps
+- [x] status
+- [x] error information
+- [x] manifest
 
 Filesystem:
 
@@ -227,9 +238,16 @@ Never synthesize or duplicate missing weather frames.
 
 The application can ingest one complete forecast run and persist it independently from video generation.
 
+Verified live on 2026-08-29. Boundary probing found that the requested 11:40 UTC
+sequence did not yet have its 19:40 endpoint, so start discovery fell back two intervals
+to the newest complete 11:20–19:20 UTC sequence. All 49 JPEGs validated and were stored
+with 100% coverage under run `merge_20260829t114240z_6d519288`.
+
 ---
 
 # Milestone 4 — Database and Persistence
+
+**Status:** Complete (2026-08-29)
 
 ## Goal
 
@@ -237,27 +255,36 @@ Persist forecast metadata across restarts.
 
 ## Deliverables
 
-- [ ] SQLite database
-- [ ] forecast run table
-- [ ] forecast frame table
-- [ ] indexes for latest-run lookup
-- [ ] startup recovery
-- [ ] migrations or a documented lightweight schema strategy
+- [x] SQLite database
+- [x] forecast run table
+- [x] forecast frame table
+- [x] indexes for latest-run lookup
+- [x] startup recovery
+- [x] migrations or a documented lightweight schema strategy
 
 Application restart must preserve:
 
-- [ ] known forecast runs
-- [ ] frame metadata
-- [ ] generated-video metadata later
-- [ ] application state
+- [x] known forecast runs
+- [x] frame metadata
+- [x] generated-video metadata can be added through forward-only migrations later
+- [x] application state
 
 ## Acceptance Criteria
 
 Restarting the backend does not lose the list of collected runs.
 
+SQLite schema version 1 uses `PRAGMA user_version` for lightweight forward-only
+migrations. On first startup it imports existing filesystem manifests, and subsequent
+starts treat the database as metadata source of truth. Interrupted `pending`, `probing`,
+or `downloading` runs are explicitly failed and mirrored back to their manifest instead
+of remaining stuck. The Milestone 3 live run and all 49 frame records remained available
+after a production container rebuild and restart.
+
 ---
 
 # Milestone 5 — Forecast REST API
+
+**Status:** Complete (2026-08-29)
 
 ## Goal
 
@@ -279,21 +306,29 @@ POST /api/runs/refresh
 
 API should expose:
 
-- [ ] latest run
-- [ ] historical runs
-- [ ] frame timestamps
-- [ ] frame URLs
-- [ ] freshness metadata
-- [ ] run status
-- [ ] download progress
+- [x] latest run
+- [x] historical runs
+- [x] frame timestamps
+- [x] frame URLs
+- [x] freshness metadata
+- [x] run status
+- [x] download progress
 
 ## Acceptance Criteria
 
 The complete latest forecast can be explored through REST without React.
 
+The API returns typed run summaries and details without exposing local filesystem paths.
+Validated JPEGs are served from path-contained run storage with immutable caching and
+SHA-256 ETags. Manual refresh returns HTTP 202, runs outside the request lifecycle, and
+returns HTTP 409 when another refresh is active. Freshness is calculated centrally from
+the resolved forecast start using `FRESH`, `DELAYED`, and `STALE` thresholds.
+
 ---
 
 # Milestone 6 — Weather Viewer MVP
+
+**Status:** Complete (2026-08-29)
 
 ## Goal
 
@@ -312,16 +347,16 @@ React routes:
 
 Main screen:
 
-- [ ] large MERGE image viewer
-- [ ] selected timestamp
-- [ ] timeline
-- [ ] frame scrubber
-- [ ] previous/next frame
-- [ ] play
-- [ ] pause
-- [ ] latest run indicator
-- [ ] weather-data freshness
-- [ ] run metadata
+- [x] large MERGE image viewer
+- [x] selected timestamp
+- [x] timeline
+- [x] frame scrubber
+- [x] previous/next frame
+- [x] play
+- [x] pause
+- [x] latest run indicator
+- [x] weather-data freshness
+- [x] run metadata
 
 Timeline should visually emphasize time.
 
@@ -335,19 +370,28 @@ Example:
 
 ## Interaction
 
-- [ ] click timestamp → change frame
-- [ ] drag/scrub timeline → change frame
-- [ ] play animation
-- [ ] stop at end or loop depending on chosen behavior
-- [ ] keyboard arrow navigation where practical
+- [x] click timestamp → change frame
+- [x] drag/scrub timeline → change frame
+- [x] play animation
+- [x] stop at end or loop depending on chosen behavior
+- [x] keyboard arrow navigation where practical
 
 ## Acceptance Criteria
 
 A user can open the app and understand the latest precipitation forecast without generating a video.
 
+The viewer loops valid frames at 2 FPS and keeps unavailable timestamps visibly
+unavailable instead of substituting weather data. The native range control supports
+pointer scrubbing and keyboard arrows; the focused image viewer also supports left/right
+navigation. Local `Europe/Warsaw` time, UTC source time, forecast offset, freshness,
+latest-run state, run metadata, and recent historical runs remain visible around the
+undistorted forecast image.
+
 ---
 
 # Milestone 7 — Freshness and Live Data UX
+
+**Status:** Complete (2026-08-29)
 
 ## Goal
 
@@ -381,19 +425,28 @@ UI:
 
 Show:
 
-- [ ] current local time
-- [ ] source update time
-- [ ] data age
-- [ ] scheduler state
-- [ ] backend reachability
+- [x] current local time
+- [x] source update time
+- [x] data age
+- [x] scheduler state
+- [x] backend reachability
 
 ## Acceptance Criteria
 
 The user never has to guess whether they are looking at old forecast data.
 
+The latest temporally fresh run is labeled `LIVE`; a fresh historical run remains
+`FRESH`. The backend supplies centralized `FRESH`, `DELAYED`, and `STALE` classification,
+while the UI adds `OFFLINE` when status polling fails and continues to label any cached
+imagery honestly. The header clock updates in `Europe/Warsaw`. Source time is shown in
+both Warsaw and UTC, and the compact live-data panel exposes age, reachability, manual
+refresh activity/result, last IMGW error, and the explicitly disabled scheduler state.
+
 ---
 
 # Milestone 8 — Forecast Run Browser
+
+**Status:** Complete (2026-08-29)
 
 ## Goal
 
@@ -412,19 +465,28 @@ Compact run list:
 
 Features:
 
-- [ ] load historical run
-- [ ] preserve selected forecast offset if possible
-- [ ] clearly mark latest
-- [ ] show missing/incomplete runs
-- [ ] show ingestion failures
+- [x] load historical run
+- [x] preserve selected forecast offset if possible
+- [x] clearly mark latest
+- [x] show missing/incomplete runs
+- [x] show ingestion failures
 
 ## Acceptance Criteria
 
 The user can inspect how the forecast looked in recent publication cycles.
 
+The compact run browser lists recent publications newest-first, distinguishes the latest
+completed forecast from historical snapshots, and keeps failed or partial ingestion
+attempts visible. Run changes carry the selected minute offset in the route and choose
+the nearest valid frame when that exact offset is unavailable. Selecting an incomplete
+or failed run exposes its progress, exact ingestion error, and source UTC timestamps for
+missing frames without inventing replacement weather data.
+
 ---
 
 # Milestone 9 — FFmpeg Video Generation
+
+**Status:** Complete (2026-08-29)
 
 ## Goal
 
@@ -483,6 +545,15 @@ merge_2026-08-29_12-50_to_20-50_<id>.mp4
 ## Acceptance Criteria
 
 A completed forecast run can reliably produce a browser-compatible MP4.
+
+Video generation is a separate persisted domain with `pending`, `rendering`,
+`completed`, and `failed` states and a one-to-many relationship with forecast runs.
+The source and 1080×1080 modes use chronological validated frames without stretching
+or filling weather-data gaps. FFmpeg runs without a shell using whitelisted encoding
+settings; output remains temporary until ffprobe verifies an H.264/yuv420p video stream,
+positive duration, expected dimensions, and a sensible size. Interrupted operations are
+explicitly failed on startup, duplicate active renders are rejected, and completed MP4s
+are available through typed REST and CLI contracts.
 
 ---
 

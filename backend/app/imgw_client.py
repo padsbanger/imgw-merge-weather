@@ -15,6 +15,8 @@ from pathlib import Path
 import httpx
 from PIL import Image, UnidentifiedImageError
 
+from app.forecast import to_utc
+
 LOGGER = logging.getLogger(__name__)
 
 FRAME_TIMESTAMP_FORMAT = "%Y-%m-%d_%H_%M_%S"
@@ -73,20 +75,10 @@ class ImageDimensions:
     image_format: str
 
 
-def _require_aware(timestamp: datetime) -> None:
-    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
-        raise ValueError("MERGE frame timestamps must be timezone-aware")
-
-
 def format_frame_timestamp(timestamp: datetime) -> str:
-    """Format the supplied source timestamp without changing its timezone.
+    """Format a forecast valid time using IMGW's verified UTC convention."""
 
-    The IMGW filename timezone convention is intentionally left to the caller until
-    Milestone 2 verifies it against live source behavior.
-    """
-
-    _require_aware(timestamp)
-    return timestamp.strftime(FRAME_TIMESTAMP_FORMAT)
+    return to_utc(timestamp).strftime(FRAME_TIMESTAMP_FORMAT)
 
 
 def build_frame_filename(timestamp: datetime) -> str:
@@ -206,9 +198,10 @@ class ImgwMergeClient:
     async def fetch_frame(self, timestamp: datetime) -> DownloadedFrame:
         """GET and validate exactly one frame, retrying bounded transient failures."""
 
-        url = self.frame_url(timestamp)
+        canonical_time = to_utc(timestamp)
+        url = self.frame_url(canonical_time)
         async with self._semaphore:
-            return await self._fetch_with_retries(timestamp, url)
+            return await self._fetch_with_retries(canonical_time, url)
 
     async def download_frame(self, timestamp: datetime, destination: Path) -> FrameMetadata:
         """Fetch one frame and atomically replace the destination after validation."""
@@ -217,7 +210,19 @@ class ImgwMergeClient:
         await asyncio.to_thread(_atomic_write, destination, frame.content)
         LOGGER.info(
             "event=frame_download forecast_time=%s status=success size_bytes=%d path=%s",
-            timestamp.isoformat(),
+            frame.metadata.forecast_time.isoformat(),
+            frame.metadata.size_bytes,
+            destination,
+        )
+        return frame.metadata
+
+    async def save_frame(self, frame: DownloadedFrame, destination: Path) -> FrameMetadata:
+        """Atomically save an already fetched and validated frame without another GET."""
+
+        await asyncio.to_thread(_atomic_write, destination, frame.content)
+        LOGGER.info(
+            "event=frame_save forecast_time=%s status=success size_bytes=%d path=%s",
+            frame.metadata.forecast_time.isoformat(),
             frame.metadata.size_bytes,
             destination,
         )
