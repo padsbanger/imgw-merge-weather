@@ -34,6 +34,9 @@ class VideoGenerationCoordinator:
         run_id: str,
         mode: VideoMode,
         fps: int | None = None,
+        start_frame_index: int | None = None,
+        end_frame_index: int | None = None,
+        timestamp_overlay: bool = False,
     ) -> VideoGeneration:
         effective_fps = fps if fps is not None else self.service.settings.video_fps
         async with self._lock:
@@ -48,6 +51,9 @@ class VideoGenerationCoordinator:
                 run_id=run_id,
                 mode=mode,
                 fps=effective_fps,
+                start_frame_index=start_frame_index,
+                end_frame_index=end_frame_index,
+                timestamp_overlay=timestamp_overlay,
             )
             task = asyncio.create_task(
                 self.service.generate(video.video_id),

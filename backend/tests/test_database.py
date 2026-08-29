@@ -133,11 +133,16 @@ def test_database_migrates_existing_version_one_database_forward(tmp_path: Path)
     assert database.schema_version() == 1
     database.initialize()
 
-    assert database.schema_version() == 2
+    assert database.schema_version() == 3
     with sqlite3.connect(database.path) as connection:
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'video_generations'"
         ).fetchone() == ("video_generations",)
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(video_generations)").fetchall()
+        }
+    assert {"start_frame_index", "end_frame_index", "timestamp_overlay"} <= columns
 
 
 def test_repository_round_trips_runs_frames_and_application_state(tmp_path: Path) -> None:

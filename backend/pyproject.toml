@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Self-hosted IMGW CMM MERGE precipitation forecast viewer"
 requires-python = ">=3.12"
 dependencies = [
+    "apscheduler>=3.11,<4.0",
     "fastapi>=0.116,<1.0",
     "httpx>=0.28,<1.0",
     "pillow>=11.3,<13.0",

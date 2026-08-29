@@ -103,6 +103,13 @@ def _add_video_arguments(parser: argparse.ArgumentParser) -> None:
         help="output framing mode",
     )
     parser.add_argument("--fps", type=int, help="frames per second (1-30)")
+    parser.add_argument("--start-frame", type=int, help="first frame index to include")
+    parser.add_argument("--end-frame", type=int, help="last frame index to include")
+    parser.add_argument(
+        "--timestamp-overlay",
+        action="store_true",
+        help="render Warsaw and UTC forecast time onto each staged frame",
+    )
 
 
 def create_client(settings: Settings) -> ImgwMergeClient:
@@ -206,6 +213,9 @@ async def generate_video(
     run_id: str | None,
     mode: VideoMode,
     fps: int | None,
+    start_frame_index: int | None,
+    end_frame_index: int | None,
+    timestamp_overlay: bool,
     settings: Settings,
 ) -> VideoGeneration:
     settings.ensure_data_directories()
@@ -224,7 +234,14 @@ async def generate_video(
         forecast_repository=forecast_repository,
         video_repository=video_repository,
     )
-    video = service.create_generation(run_id=run_id, mode=mode, fps=fps)
+    video = service.create_generation(
+        run_id=run_id,
+        mode=mode,
+        fps=fps,
+        start_frame_index=start_frame_index,
+        end_frame_index=end_frame_index,
+        timestamp_overlay=timestamp_overlay,
+    )
     video = await service.generate(video.video_id)
     print(
         json.dumps(
@@ -234,6 +251,9 @@ async def generate_video(
                 "status": video.status.value,
                 "mode": video.mode.value,
                 "fps": video.fps,
+                "start_frame_index": video.start_frame_index,
+                "end_frame_index": video.end_frame_index,
+                "timestamp_overlay": video.timestamp_overlay,
                 "output": f"output/{video.output_filename}",
                 "width": video.width,
                 "height": video.height,
@@ -279,6 +299,9 @@ def main(argv: list[str] | None = None) -> int:
                     run_id=arguments.run if arguments.command == "generate" else None,
                     mode=arguments.mode,
                     fps=arguments.fps,
+                    start_frame_index=arguments.start_frame,
+                    end_frame_index=arguments.end_frame,
+                    timestamp_overlay=arguments.timestamp_overlay,
                     settings=settings,
                 )
             )

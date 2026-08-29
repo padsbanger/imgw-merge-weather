@@ -1,5 +1,6 @@
 """FastAPI entry point for imgw-merge-weather."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -14,6 +15,7 @@ from app.api import router as forecast_router
 from app.config import Settings, get_settings
 from app.database import ForecastRepository, VideoRepository
 from app.persistence import initialize_forecast_persistence
+from app.scheduler import AutomaticRefreshScheduler
 from app.schemas import HealthResponse, SchedulerStatusResponse, ServiceStatusResponse
 from app.services.refresh import RefreshCoordinator, ingest_latest_forecast
 from app.services.video_generation import VideoGenerationCoordinator
@@ -23,13 +25,20 @@ from app.video_api import router as video_router
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or get_settings()
+    app_logger = logging.getLogger("app")
+    app_logger.setLevel(app_settings.log_level.upper())
+    uvicorn_handlers = logging.getLogger("uvicorn").handlers
+    if uvicorn_handlers:
+        app_logger.handlers = list(uvicorn_handlers)
+        app_logger.propagate = False
     repository: ForecastRepository | None = None
     refresh_coordinator: RefreshCoordinator | None = None
     video_coordinator: VideoGenerationCoordinator | None = None
+    automatic_scheduler: AutomaticRefreshScheduler | None = None
 
     @asynccontextmanager
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
-        nonlocal refresh_coordinator, repository, video_coordinator
+        nonlocal automatic_scheduler, refresh_coordinator, repository, video_coordinator
         app_settings.ensure_data_directories()
         repository, _ = initialize_forecast_persistence(
             database_path=app_settings.database_path,
@@ -50,13 +59,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             service=video_service,
             repository=video_repository,
         )
+        automatic_scheduler = AutomaticRefreshScheduler(
+            app_settings,
+            refresh_coordinator,
+        )
         lifespan_app.state.forecast_repository = repository
         lifespan_app.state.refresh_coordinator = refresh_coordinator
         lifespan_app.state.video_repository = video_repository
         lifespan_app.state.video_coordinator = video_coordinator
+        lifespan_app.state.automatic_scheduler = automatic_scheduler
+        automatic_scheduler.start()
         try:
             yield
         finally:
+            automatic_scheduler.shutdown()
             await video_coordinator.shutdown()
             await refresh_coordinator.shutdown()
 
@@ -78,10 +94,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.get("/api/status", response_model=ServiceStatusResponse, tags=["operations"])
     async def service_status(request: Request) -> ServiceStatusResponse:
         coordinator = getattr(request.app.state, "refresh_coordinator", None)
+        scheduler = getattr(request.app.state, "automatic_scheduler", None)
         return ServiceStatusResponse(
             service=app_settings.app_name,
             version=__version__,
-            milestone=9,
+            milestone=11,
             server_time=datetime.now(UTC),
             weather_data_available=(
                 repository.has_completed_run() if repository is not None else False
@@ -93,9 +110,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
             last_imgw_error=(coordinator.last_imgw_error if coordinator is not None else None),
             scheduler=SchedulerStatusResponse(
-                enabled=app_settings.scheduler_enabled,
-                state="not_configured" if app_settings.scheduler_enabled else "disabled",
-                next_run_at=None,
+                enabled=scheduler.enabled if scheduler is not None else False,
+                state=scheduler.state if scheduler is not None else "unavailable",
+                next_run_at=scheduler.next_run_at if scheduler is not None else None,
             ),
         )
 

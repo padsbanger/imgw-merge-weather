@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.database import Database, ForecastRepository
+from app.forecast import CompleteSequenceProbe
 from app.imgw_client import (
     DownloadedFrame,
     FrameMetadata,
@@ -238,6 +239,31 @@ async def test_latest_start_fallback_does_not_shift_later_sequence_times(tmp_pat
         START + timedelta(minutes=30),
     ]
     assert client.fetch_counts[START] == 2
+
+
+@pytest.mark.asyncio
+async def test_ingestion_reuses_prevalidated_scheduler_boundary_frames(tmp_path: Path) -> None:
+    client = FakeImgwClient()
+    service = create_service(tmp_path, client)
+    end = START + timedelta(hours=1)
+    prefetched = {
+        START: await client.fetch_frame(START),
+        end: await client.fetch_frame(end),
+    }
+    probe = CompleteSequenceProbe(
+        expected_start_time=START,
+        resolved_start_time=START,
+        fallback_steps=0,
+        attempted_start_times=(START,),
+        prefetched_frames=prefetched,
+    )
+
+    run = await service.ingest(now=START, latest_probe=probe)
+
+    assert run.status == ForecastRunStatus.COMPLETED
+    assert client.fetch_counts[START] == 1
+    assert client.fetch_counts[end] == 1
+    assert client.fetch_counts[START + timedelta(minutes=30)] == 1
 
 
 @pytest.mark.asyncio

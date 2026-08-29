@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.freshness import FreshnessState, calculate_forecast_freshness
 from app.models import (
@@ -107,6 +107,19 @@ class RefreshAcceptedResponse(BaseModel):
 class VideoCreateRequest(BaseModel):
     mode: VideoMode = VideoMode.SOURCE
     fps: int | None = Field(default=None, ge=1, le=30)
+    start_frame_index: int | None = Field(default=None, ge=0, le=10_000)
+    end_frame_index: int | None = Field(default=None, ge=0, le=10_000)
+    timestamp_overlay: bool = False
+
+    @model_validator(mode="after")
+    def validate_frame_range(self) -> VideoCreateRequest:
+        if (
+            self.start_frame_index is not None
+            and self.end_frame_index is not None
+            and self.start_frame_index > self.end_frame_index
+        ):
+            raise ValueError("start_frame_index must not exceed end_frame_index")
+        return self
 
 
 class VideoGenerationResponse(BaseModel):
@@ -121,6 +134,9 @@ class VideoGenerationResponse(BaseModel):
     crf: int
     preset: str
     output_filename: str
+    start_frame_index: int
+    end_frame_index: int | None
+    timestamp_overlay: bool
     width: int | None
     height: int | None
     duration_seconds: float | None
@@ -133,6 +149,11 @@ class VideoGenerationResponse(BaseModel):
 class VideoGenerationListResponse(BaseModel):
     videos: list[VideoGenerationResponse]
     count: int = Field(ge=0)
+
+
+class VideoDeleteResponse(BaseModel):
+    video_id: str
+    status: str
 
 
 def forecast_run_summary(

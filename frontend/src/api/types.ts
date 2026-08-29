@@ -16,7 +16,7 @@ export interface ServiceStatusResponse {
   last_imgw_error: string | null
   scheduler: {
     enabled: boolean
-    state: string
+    state: 'disabled' | 'running' | 'stopped' | 'unavailable'
     next_run_at: string | null
   }
 }
@@ -85,4 +85,49 @@ export interface ForecastRunListResponse {
 export interface RefreshAcceptedResponse {
   status: string
   detail: string
+}
+
+export type VideoGenerationStatus = 'pending' | 'rendering' | 'completed' | 'failed'
+export type VideoMode = 'source' | '1:1'
+
+export interface VideoGeneration {
+  video_id: string
+  run_id: string
+  created_at: string
+  updated_at: string
+  status: VideoGenerationStatus
+  mode: VideoMode
+  fps: number
+  codec: string
+  crf: number
+  preset: string
+  output_filename: string
+  start_frame_index: number
+  end_frame_index: number | null
+  timestamp_overlay: boolean
+  width: number | null
+  height: number | null
+  duration_seconds: number | null
+  size_bytes: number | null
+  error: string | null
+  detail_url: string
+  file_url: string | null
+}
+
+export interface VideoGenerationListResponse {
+  videos: VideoGeneration[]
+  count: number
+}
+
+export interface VideoCreateRequest {
+  mode: VideoMode
+  fps: number
+  start_frame_index: number
+  end_frame_index: number
+  timestamp_overlay: boolean
+}
+
+export interface VideoDeleteResponse {
+  video_id: string
+  status: 'deleted'
 }

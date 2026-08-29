@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image
 
 from app.config import Settings
 from app.database import Database, ForecastRepository, VideoRepository
@@ -41,15 +42,22 @@ class FakeCommands:
         self.pixel_format = pixel_format
         self.calls: list[list[str]] = []
         self.staged_targets: list[Path] = []
+        self.staged_symlinks: list[bool] = []
+        self.overlay_sample: tuple[int, int, int] | None = None
 
     async def __call__(self, arguments: Any, _timeout: float) -> CommandResult:
         command = list(arguments)
         self.calls.append(command)
         if command[0] == "ffmpeg":
             input_pattern = Path(command[command.index("-i") + 1])
-            self.staged_targets = [
-                path.resolve() for path in sorted(input_pattern.parent.glob("frame_*.jpg"))
-            ]
+            staged = sorted(input_pattern.parent.glob("frame_*.jpg"))
+            self.staged_symlinks = [path.is_symlink() for path in staged]
+            self.staged_targets = [path.resolve() for path in staged]
+            if staged and not staged[0].is_symlink():
+                with Image.open(staged[0]) as image:
+                    self.overlay_sample = image.convert("RGB").getpixel(
+                        (30, image.height - 30)
+                    )
             Path(command[-1]).write_bytes(b"mp4" * 700)
             return CommandResult(0, "", "")
         payload = {
@@ -200,6 +208,59 @@ async def test_permissive_video_skips_missing_frames_without_duplication(tmp_pat
         (settings.runs_dir / run.run_id / "frames/frame_000.jpg").resolve(),
         (settings.runs_dir / run.run_id / "frames/frame_002.jpg").resolve(),
     ]
+
+
+@pytest.mark.asyncio
+async def test_selected_range_and_timestamp_overlay_are_persisted_and_staged(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(data_dir=tmp_path)
+    run = make_run(settings)
+    for frame in run.frames:
+        path = settings.runs_dir / run.run_id / frame.local_filename
+        Image.new("RGB", (1700, 1600), (80, 120, 160)).save(path, format="JPEG")
+    commands = FakeCommands(width=1700, height=1600)
+    service, _ = make_service(tmp_path, run, commands)
+
+    video = service.create_generation(
+        run_id=run.run_id,
+        mode=VideoMode.SOURCE,
+        start_frame_index=1,
+        end_frame_index=2,
+        timestamp_overlay=True,
+    )
+    result = await service.generate(video.video_id)
+
+    assert result.status == VideoGenerationStatus.COMPLETED
+    assert result.start_frame_index == 1
+    assert result.end_frame_index == 2
+    assert result.timestamp_overlay is True
+    assert commands.staged_symlinks == [False, False]
+    assert commands.overlay_sample is not None
+    assert commands.overlay_sample != (80, 120, 160)
+
+
+def test_rejects_invalid_video_frame_range(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path)
+    run = make_run(settings)
+    service, _ = make_service(
+        tmp_path, run, FakeCommands(width=1700, height=1600)
+    )
+
+    with pytest.raises(VideoPrerequisiteError, match="start must not be after"):
+        service.create_generation(
+            run_id=run.run_id,
+            mode=VideoMode.SOURCE,
+            start_frame_index=2,
+            end_frame_index=1,
+        )
+    with pytest.raises(VideoPrerequisiteError, match="between 0 and 2"):
+        service.create_generation(
+            run_id=run.run_id,
+            mode=VideoMode.SOURCE,
+            start_frame_index=0,
+            end_frame_index=3,
+        )
 
 
 def test_rejects_incomplete_failed_or_unsafe_forecast_sources(tmp_path: Path) -> None:

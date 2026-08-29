@@ -18,7 +18,7 @@ from app.models import (
     VideoMode,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 INTERRUPTED_RUN_STATUSES = (
     ForecastRunStatus.PENDING,
     ForecastRunStatus.PROBING,
@@ -66,6 +66,9 @@ class Database:
                 version = 1
             if version == 1:
                 self._apply_version_2(connection)
+                version = 2
+            if version == 2:
+                self._apply_version_3(connection)
 
     @staticmethod
     def _apply_version_1(connection: sqlite3.Connection) -> None:
@@ -174,6 +177,26 @@ class Database:
                 WHERE status IN ('pending', 'rendering');
 
             PRAGMA user_version = 2;
+            COMMIT;
+            """
+        )
+
+    @staticmethod
+    def _apply_version_3(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            BEGIN IMMEDIATE;
+
+            ALTER TABLE video_generations
+                ADD COLUMN start_frame_index INTEGER NOT NULL DEFAULT 0
+                CHECK (start_frame_index >= 0);
+            ALTER TABLE video_generations
+                ADD COLUMN end_frame_index INTEGER CHECK (end_frame_index >= 0);
+            ALTER TABLE video_generations
+                ADD COLUMN timestamp_overlay INTEGER NOT NULL DEFAULT 0
+                CHECK (timestamp_overlay IN (0, 1));
+
+            PRAGMA user_version = 3;
             COMMIT;
             """
         )
@@ -383,6 +406,9 @@ class VideoRepository:
         "crf",
         "preset",
         "output_filename",
+        "start_frame_index",
+        "end_frame_index",
+        "timestamp_overlay",
         "width",
         "height",
         "duration_seconds",
@@ -395,6 +421,7 @@ class VideoRepository:
 
     def upsert(self, video: VideoGeneration) -> None:
         payload = video.model_dump(mode="json")
+        payload["timestamp_overlay"] = int(video.timestamp_overlay)
         columns = ", ".join(self._COLUMNS)
         values = ", ".join(f":{column}" for column in self._COLUMNS)
         updates = ", ".join(
@@ -414,7 +441,7 @@ class VideoRepository:
             row = connection.execute(
                 "SELECT * FROM video_generations WHERE video_id = ?", (video_id,)
             ).fetchone()
-        return VideoGeneration.model_validate(dict(row)) if row is not None else None
+        return self._hydrate(row) if row is not None else None
 
     def list(
         self,
@@ -434,7 +461,7 @@ class VideoRepository:
         query += " ORDER BY created_at DESC LIMIT ?"
         with self.database.connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
-        return [VideoGeneration.model_validate(dict(row)) for row in rows]
+        return [self._hydrate(row) for row in rows]
 
     def get_active(
         self,
@@ -454,7 +481,14 @@ class VideoRepository:
                 """,
                 (run_id, mode.value, fps),
             ).fetchone()
-        return VideoGeneration.model_validate(dict(row)) if row is not None else None
+        return self._hydrate(row) if row is not None else None
+
+    def delete(self, video_id: str) -> bool:
+        with self.database.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM video_generations WHERE video_id = ?", (video_id,)
+            )
+            return cursor.rowcount > 0
 
     def recover_interrupted(
         self,
@@ -472,10 +506,16 @@ class VideoRepository:
             ).fetchall()
         recovered: list[VideoGeneration] = []
         for row in rows:
-            video = VideoGeneration.model_validate(dict(row))
+            video = self._hydrate(row)
             video.status = VideoGenerationStatus.FAILED
             video.updated_at = timestamp
             video.error = "Interrupted by application restart"
             self.upsert(video)
             recovered.append(video)
         return recovered
+
+    @staticmethod
+    def _hydrate(row: sqlite3.Row) -> VideoGeneration:
+        payload = dict(row)
+        payload["timestamp_overlay"] = bool(payload["timestamp_overlay"])
+        return VideoGeneration.model_validate(payload)

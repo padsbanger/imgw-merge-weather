@@ -109,6 +109,9 @@ class VideoGeneration(BaseModel):
     crf: int = Field(ge=0, le=51)
     preset: str
     output_filename: str
+    start_frame_index: int = Field(default=0, ge=0)
+    end_frame_index: int | None = Field(default=None, ge=0)
+    timestamp_overlay: bool = False
     width: int | None = Field(default=None, gt=0)
     height: int | None = Field(default=None, gt=0)
     duration_seconds: float | None = Field(default=None, gt=0)

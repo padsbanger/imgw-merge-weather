@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     app_name: str = "imgw-merge-weather"
     host: str = "0.0.0.0"
     port: int = Field(default=8080, ge=1, le=65535)
-    log_level: str = "info"
+    log_level: Literal["debug", "info", "warning", "error", "critical"] = "info"
     data_dir: Path = Path(__file__).resolve().parents[2] / "data"
     static_dir: Path | None = None
     base_url: str = "https://cmm.imgw.pl/wp-content/uploads/production/MERGE"
@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     allow_missing_frames: bool = False
     min_frame_coverage: float = Field(default=0.90, ge=0.0, le=1.0)
     scheduler_enabled: bool = False
+    scheduler_cron: str = "2 * * * *"
+    scheduler_misfire_grace_seconds: int = Field(default=60, ge=1, le=600)
     video_fps: int = Field(default=5, ge=1, le=30)
     video_codec: Literal["libx264"] = "libx264"
     video_crf: int = Field(default=20, ge=0, le=51)

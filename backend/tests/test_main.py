@@ -36,7 +36,7 @@ def test_status_reports_current_milestone_without_ingested_weather_data(tmp_path
     assert payload == {
         "service": "imgw-merge-weather",
         "version": "0.1.0",
-        "milestone": 9,
+        "milestone": 11,
         "weather_data_available": False,
         "refresh_in_progress": False,
         "last_refresh_at": None,
@@ -75,3 +75,22 @@ def test_status_detects_completed_database_run(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert response.json()["weather_data_available"] is True
+
+
+def test_status_exposes_enabled_scheduler_and_next_run(tmp_path: Path) -> None:
+    app = create_app(
+        Settings(
+            data_dir=tmp_path,
+            scheduler_enabled=True,
+            scheduler_cron="2 * * * *",
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/status")
+
+    scheduler = response.json()["scheduler"]
+    next_run = datetime.fromisoformat(scheduler["next_run_at"].replace("Z", "+00:00"))
+    assert scheduler["enabled"] is True
+    assert scheduler["state"] == "running"
+    assert next_run.tzinfo is not None

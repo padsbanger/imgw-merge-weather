@@ -66,7 +66,9 @@ def video(
 class StubVideoCoordinator:
     def __init__(self, pending: VideoGeneration) -> None:
         self.pending = pending
-        self.calls: list[tuple[str, VideoMode, int | None]] = []
+        self.calls: list[
+            tuple[str, VideoMode, int | None, int | None, int | None, bool]
+        ] = []
 
     async def start(
         self,
@@ -74,8 +76,20 @@ class StubVideoCoordinator:
         run_id: str,
         mode: VideoMode,
         fps: int | None,
+        start_frame_index: int | None,
+        end_frame_index: int | None,
+        timestamp_overlay: bool,
     ) -> VideoGeneration:
-        self.calls.append((run_id, mode, fps))
+        self.calls.append(
+            (
+                run_id,
+                mode,
+                fps,
+                start_frame_index,
+                end_frame_index,
+                timestamp_overlay,
+            )
+        )
         return self.pending
 
 
@@ -99,13 +113,23 @@ def test_video_api_starts_typed_background_generation_and_validates_input(
         app.state.video_coordinator = coordinator
         response = client.post(
             "/api/runs/merge_video_api/videos",
-            json={"mode": "1:1", "fps": 7},
+            json={
+                "mode": "1:1",
+                "fps": 7,
+                "start_frame_index": 2,
+                "end_frame_index": 20,
+                "timestamp_overlay": True,
+            },
         )
         invalid_mode = client.post(
             "/api/runs/merge_video_api/videos", json={"mode": "stretch"}
         )
         invalid_fps = client.post(
             "/api/runs/merge_video_api/videos", json={"fps": 0}
+        )
+        invalid_range = client.post(
+            "/api/runs/merge_video_api/videos",
+            json={"start_frame_index": 20, "end_frame_index": 2},
         )
         missing_run = client.post(
             "/api/runs/merge_unknown/videos", json={"mode": "source"}
@@ -114,9 +138,12 @@ def test_video_api_starts_typed_background_generation_and_validates_input(
     assert response.status_code == 202
     assert response.json()["status"] == "pending"
     assert response.json()["file_url"] is None
-    assert coordinator.calls == [("merge_video_api", VideoMode.SQUARE, 7)]
+    assert coordinator.calls == [
+        ("merge_video_api", VideoMode.SQUARE, 7, 2, 20, True)
+    ]
     assert invalid_mode.status_code == 422
     assert invalid_fps.status_code == 422
+    assert invalid_range.status_code == 422
     assert missing_run.status_code == 404
 
 
@@ -136,6 +163,9 @@ def test_video_api_lists_details_and_serves_only_completed_mp4(tmp_path: Path) -
         detail = client.get(f"/api/videos/{completed.video_id}")
         file_response = client.get(f"/api/videos/{completed.video_id}/file")
         pending_file = client.get(f"/api/videos/{pending.video_id}/file")
+        pending_delete = client.delete(f"/api/videos/{pending.video_id}")
+        deleted = client.delete(f"/api/videos/{completed.video_id}")
+        deleted_detail = client.get(f"/api/videos/{completed.video_id}")
         missing = client.get("/api/videos/video_missing1")
 
     assert listing.status_code == 200
@@ -149,4 +179,8 @@ def test_video_api_lists_details_and_serves_only_completed_mp4(tmp_path: Path) -
     assert file_response.headers["content-type"] == "video/mp4"
     assert file_response.content == b"browser-compatible-mp4"
     assert pending_file.status_code == 409
+    assert pending_delete.status_code == 409
+    assert deleted.json() == {"video_id": completed.video_id, "status": "deleted"}
+    assert not output_path.exists()
+    assert deleted_detail.status_code == 404
     assert missing.status_code == 404

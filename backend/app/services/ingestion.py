@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from app.database import ForecastRepository
 from app.forecast import (
+    CompleteSequenceProbe,
     LatestFrameNotFoundError,
     build_frame_times,
     floor_to_interval,
@@ -106,12 +107,19 @@ class ForecastIngestionService:
         *,
         start_time: datetime | None = None,
         now: datetime | None = None,
+        latest_probe: CompleteSequenceProbe | None = None,
     ) -> ForecastRun:
+        if start_time is not None and latest_probe is not None:
+            raise ValueError("Explicit start time and latest probe are mutually exclusive")
         discovered_at = to_utc(now or datetime.now(UTC))
         requested_start = (
             to_utc(start_time)
             if start_time is not None
-            else floor_to_interval(discovered_at, self.interval_minutes)
+            else (
+                latest_probe.expected_start_time
+                if latest_probe is not None
+                else floor_to_interval(discovered_at, self.interval_minutes)
+            )
         )
         run_id = self.run_id_factory(discovered_at)
         run_directory = safe_run_directory(self.data_dir, run_id)
@@ -131,7 +139,12 @@ class ForecastIngestionService:
 
         try:
             prefetched_frames: dict[datetime, DownloadedFrame] = {}
-            if start_time is None:
+            if latest_probe is not None:
+                run.status = ForecastRunStatus.PROBING
+                self._persist_run(run, run_directory)
+                resolved_start = latest_probe.resolved_start_time
+                prefetched_frames = latest_probe.prefetched_frames
+            elif start_time is None:
                 run.status = ForecastRunStatus.PROBING
                 self._persist_run(run, run_directory)
                 probe = await probe_latest_complete_sequence(

@@ -1,8 +1,14 @@
 # imgw-merge-weather
 
-Self-hosted weather viewer for collecting IMGW CMM MERGE precipitation forecast frames and, in later milestones, exploring forecast runs and generating MP4 animations.
+Self-hosted weather viewer for collecting IMGW CMM MERGE precipitation forecast frames,
+exploring forecast runs, and generating shareable MP4 animations.
 
-**Milestones 0–9 are complete.** The repository provides a typed FastAPI backend, an interactive React weather viewer with explicit live-data freshness and forecast-run history, validated IMGW MERGE frame retrieval, canonical UTC forecast sequencing, complete run ingestion, SQLite metadata persistence, validated FFmpeg MP4 generation, automated tests and linting, and a single-container Docker Compose deployment.
+**Milestones 0–11 are complete.** The repository provides a typed FastAPI backend, an
+interactive React weather viewer with explicit live-data freshness and forecast-run
+history, validated IMGW MERGE frame retrieval, canonical UTC forecast sequencing,
+complete run ingestion, SQLite metadata persistence, validated FFmpeg MP4 generation,
+an integrated video drawer, optional duplicate-safe automatic refresh, automated tests
+and linting, and a single-container Docker Compose deployment.
 
 ## Quick start with Docker
 
@@ -31,6 +37,12 @@ The header continuously shows Warsaw local time and one of `LIVE`, `FRESH`, `DEL
 reachability, refresh activity, last refresh outcome, any last IMGW error, and scheduler
 state. Cached imagery remains visible during a backend outage but is explicitly marked
 `OFFLINE`.
+
+Use the compact `Generate video` action in the current-run panel to open the secondary
+video drawer. Choose a forecast frame range, 1–30 FPS, source or padded 1080×1080 output,
+and optionally add a Warsaw/UTC timestamp overlay. The drawer tracks active rendering,
+plays completed MP4s with native browser controls, and provides download, metadata, and
+confirmation-protected deletion while leaving the weather map as the primary workspace.
 
 ### Local network access
 
@@ -159,6 +171,7 @@ forecast-run snapshot.
 - `GET /api/videos` — newest-first generated-video metadata
 - `GET /api/videos/{video_id}` — one video generation and lifecycle state
 - `POST /api/runs/{run_id}/videos` — start non-blocking MP4 generation
+- `DELETE /api/videos/{video_id}` — remove a finished generation and its MP4
 - `GET /api/videos/{video_id}/file` — stream a completed MP4
 
 Run DTOs expose UTC timestamps, display-timezone metadata, status, progress, coverage,
@@ -183,6 +196,31 @@ curl -X POST http://localhost:8080/api/runs/refresh
 The refresh endpoint returns HTTP 202 immediately. Poll `/api/runs` for status and frame
 progress. A concurrent refresh is rejected with HTTP 409.
 
+## Automatic refresh
+
+Automatic refresh uses APScheduler and remains disabled by default. Enable the
+recommended small-delay schedule in `.env`:
+
+```dotenv
+IMGW_SCHEDULER_ENABLED=true
+IMGW_SCHEDULER_CRON=2 * * * *
+IMGW_SCHEDULER_MISFIRE_GRACE_SECONDS=60
+```
+
+Restart the container after changing these values. The job runs hourly at two minutes
+past the hour in UTC, avoiding daylight-saving ambiguity while retaining a small IMGW
+publication delay.
+`/api/status` reports `running` and an aware `next_run_at`; the run panel displays that
+time in `Europe/Warsaw`.
+
+Each trigger first performs a conservative latest-sequence boundary probe. If the
+resolved start and validated boundary-frame hashes match the newest completed snapshot,
+the check is recorded as `skipped` and no duplicate run or full 49-frame download is
+created. If the publication is new or its probed content changed, ingestion proceeds and
+reuses the already validated probe frames. Manual and scheduled refreshes share the same
+overlap lock, and skipped overlaps are logged. The last refresh result and IMGW error
+are persisted in SQLite across restarts.
+
 ## Generate an MP4
 
 Generate a source-sized H.264 animation from the latest completed forecast:
@@ -199,20 +237,31 @@ docker compose exec imgw-merge-weather \
   python -m app.cli generate --run RUN_ID --mode 1:1 --fps 5
 ```
 
+Limit the animation to frames 6–24 and render traceable local/UTC timestamps onto
+staging copies of the frames:
+
+```bash
+docker compose exec imgw-merge-weather \
+  python -m app.cli generate --run RUN_ID --mode 1:1 --fps 7 \
+  --start-frame 6 --end-frame 24 --timestamp-overlay
+```
+
 The equivalent REST request is:
 
 ```bash
 curl -X POST http://localhost:8080/api/runs/RUN_ID/videos \
   -H 'Content-Type: application/json' \
-  -d '{"mode":"source","fps":5}'
+  -d '{"mode":"source","fps":5,"start_frame_index":0,"end_frame_index":48,"timestamp_overlay":false}'
 ```
 
 The request returns HTTP 202 immediately. Poll the returned `detail_url` until its state
 is `completed` or `failed`. Completed responses include a `file_url`. Generation uses
 chronological validated frames only, defaults to libx264 at 5 FPS, CRF 20, preset
 `medium`, yuv420p, and fast-start MP4. The `1:1` mode applies proportional scale and
-padding to 1080×1080. ffprobe must validate the codec, pixel format, duration,
-dimensions, and file size before the artifact is published.
+padding to 1080×1080. A requested frame range is inclusive. Optional timestamp overlays
+show Warsaw local time and the traceable UTC source time without changing the persisted
+IMGW frames. ffprobe must validate the codec, pixel format, duration, dimensions, and
+file size before the artifact is published.
 
 ## Ingest a forecast run
 
@@ -253,7 +302,8 @@ lookups. The application imports pre-database `manifest.json` files once, so run
 collected in Milestone 3 remain known after upgrading.
 
 Schema changes use small forward-only migrations keyed by SQLite `PRAGMA user_version`.
-The current schema version is 2; the video-generation table is added without rewriting
-the forecast schema. If startup finds a forecast run left in `pending`, `probing`, or
+The current schema version is 3. Video generations are stored separately from forecast
+runs and include their selected frame bounds and overlay setting without rewriting the
+forecast schema. If startup finds a forecast run left in `pending`, `probing`, or
 `downloading`, or a video left in `pending` or `rendering`, it marks the interrupted
 operation failed explicitly. Forecast recovery is also mirrored back to its manifest.

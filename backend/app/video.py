@@ -12,10 +12,14 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from PIL import Image, ImageDraw, ImageFont
 
 from app.config import Settings
 from app.database import ForecastRepository, VideoRepository
 from app.models import (
+    ForecastFrame,
     ForecastRun,
     ForecastRunStatus,
     FrameValidationStatus,
@@ -114,6 +118,9 @@ class VideoGenerationService:
         run_id: str,
         mode: VideoMode,
         fps: int | None = None,
+        start_frame_index: int | None = None,
+        end_frame_index: int | None = None,
+        timestamp_overlay: bool = False,
         created_at: datetime | None = None,
     ) -> VideoGeneration:
         run = self.forecast_repository.get_run(run_id)
@@ -122,16 +129,22 @@ class VideoGenerationService:
         effective_fps = fps if fps is not None else self.settings.video_fps
         if not 1 <= effective_fps <= 30:
             raise VideoPrerequisiteError("Video FPS must be between 1 and 30")
-        self._validated_frame_paths(run)
+        selected_frames = self._validated_frames(
+            run,
+            start_frame_index=start_frame_index,
+            end_frame_index=end_frame_index,
+        )
         if run.resolved_start_time is None or run.forecast_end_time is None:
             raise VideoPrerequisiteError("Forecast run does not have a resolved time range")
 
         timestamp = created_at or datetime.now(UTC)
         video_id = f"video_{uuid.uuid4().hex}"
         mode_label = "source" if mode == VideoMode.SOURCE else "square"
+        first_forecast_time = selected_frames[0][0].forecast_time
+        last_forecast_time = selected_frames[-1][0].forecast_time
         filename = (
-            f"merge_{run.resolved_start_time:%Y-%m-%d_%H-%M}_to_"
-            f"{run.forecast_end_time:%H-%M}_{mode_label}_{video_id[-8:]}.mp4"
+            f"merge_{first_forecast_time:%Y-%m-%d_%H-%M}_to_"
+            f"{last_forecast_time:%H-%M}_{mode_label}_{video_id[-8:]}.mp4"
         )
         video = VideoGeneration(
             video_id=video_id,
@@ -144,6 +157,17 @@ class VideoGenerationService:
             crf=self.settings.video_crf,
             preset=self.settings.video_preset,
             output_filename=filename,
+            start_frame_index=(
+                start_frame_index
+                if start_frame_index is not None
+                else min(frame.frame_index for frame in run.frames)
+            ),
+            end_frame_index=(
+                end_frame_index
+                if end_frame_index is not None
+                else max(frame.frame_index for frame in run.frames)
+            ),
+            timestamp_overlay=timestamp_overlay,
         )
         self.video_repository.upsert(video)
         LOGGER.info(
@@ -176,15 +200,28 @@ class VideoGenerationService:
         LOGGER.info("video=%s run=%s event=ffmpeg_start", video.video_id, video.run_id)
 
         try:
-            frame_paths = self._validated_frame_paths(run)
+            selected_frames = self._validated_frames(
+                run,
+                start_frame_index=video.start_frame_index,
+                end_frame_index=video.end_frame_index,
+            )
             self.settings.output_dir.mkdir(parents=True, exist_ok=True)
             temporary_output.unlink(missing_ok=True)
             with tempfile.TemporaryDirectory(
                 prefix=f".{video.video_id}.frames.", dir=self.settings.output_dir
             ) as staging_name:
                 staging_directory = Path(staging_name)
-                for position, frame_path in enumerate(frame_paths):
-                    (staging_directory / f"frame_{position:06d}.jpg").symlink_to(frame_path)
+                for position, (frame, frame_path) in enumerate(selected_frames):
+                    staged_path = staging_directory / f"frame_{position:06d}.jpg"
+                    if video.timestamp_overlay:
+                        self._render_timestamp_overlay(
+                            source_path=frame_path,
+                            output_path=staged_path,
+                            frame=frame,
+                            display_timezone=run.display_timezone,
+                        )
+                    else:
+                        staged_path.symlink_to(frame_path)
                 ffmpeg_result = await self.command_runner(
                     self._ffmpeg_arguments(video, staging_directory, temporary_output),
                     self.settings.video_timeout_seconds,
@@ -227,13 +264,41 @@ class VideoGenerationService:
         )
         return video
 
-    def _validated_frame_paths(self, run: ForecastRun) -> list[Path]:
+    def _validated_frames(
+        self,
+        run: ForecastRun,
+        *,
+        start_frame_index: int | None,
+        end_frame_index: int | None,
+    ) -> list[tuple[ForecastFrame, Path]]:
         if run.status != ForecastRunStatus.COMPLETED:
             raise VideoPrerequisiteError("Only completed forecast runs can generate videos")
-        valid_frames = sorted(
+        if not run.frames:
+            raise VideoPrerequisiteError("Forecast run has no frames")
+        minimum_index = min(frame.frame_index for frame in run.frames)
+        maximum_index = max(frame.frame_index for frame in run.frames)
+        selected_start = start_frame_index if start_frame_index is not None else minimum_index
+        selected_end = end_frame_index if end_frame_index is not None else maximum_index
+        if selected_start > selected_end:
+            raise VideoPrerequisiteError("Video range start must not be after its end")
+        if selected_start < minimum_index or selected_end > maximum_index:
+            raise VideoPrerequisiteError(
+                f"Video frame range must stay between {minimum_index} and {maximum_index}"
+            )
+        range_frames = sorted(
             (
                 frame
                 for frame in run.frames
+                if selected_start <= frame.frame_index <= selected_end
+            ),
+            key=lambda frame: frame.forecast_time,
+        )
+        if not range_frames:
+            raise VideoPrerequisiteError("Selected video range has no forecast frames")
+        valid_frames = sorted(
+            (
+                frame
+                for frame in range_frames
                 if frame.validation_status == FrameValidationStatus.VALID
             ),
             key=lambda frame: frame.forecast_time,
@@ -242,15 +307,16 @@ class VideoGenerationService:
             raise VideoPrerequisiteError("Forecast run has no valid frames")
         unavailable = [
             frame.forecast_time
-            for frame in run.frames
+            for frame in range_frames
             if frame.validation_status != FrameValidationStatus.VALID
         ]
         if unavailable and not run.allow_missing_frames:
             missing = ", ".join(timestamp.isoformat() for timestamp in unavailable)
             raise VideoPrerequisiteError(f"Required forecast frames are unavailable: {missing}")
-        if unavailable and run.coverage < run.minimum_frame_coverage:
+        selected_coverage = len(valid_frames) / len(range_frames)
+        if unavailable and selected_coverage < run.minimum_frame_coverage:
             raise VideoPrerequisiteError(
-                f"Forecast frame coverage {run.coverage:.3f} is below required "
+                f"Forecast frame coverage {selected_coverage:.3f} is below required "
                 f"{run.minimum_frame_coverage:.3f}"
             )
 
@@ -266,15 +332,73 @@ class VideoGenerationService:
         if run_directory.parent != runs_root:
             raise VideoPrerequisiteError("Forecast run path is outside the runs directory")
 
-        paths: list[Path] = []
+        selected: list[tuple[ForecastFrame, Path]] = []
         for frame in valid_frames:
             path = (run_directory / frame.local_filename).resolve()
             if not path.is_relative_to(frames_directory) or not path.is_file():
                 raise VideoPrerequisiteError(
                     f"Validated frame file is unavailable for index {frame.frame_index}"
                 )
-            paths.append(path)
-        return paths
+            selected.append((frame, path))
+        return selected
+
+    @staticmethod
+    def _render_timestamp_overlay(
+        *,
+        source_path: Path,
+        output_path: Path,
+        frame: ForecastFrame,
+        display_timezone: str,
+    ) -> None:
+        try:
+            timezone = ZoneInfo(display_timezone)
+        except ZoneInfoNotFoundError as error:
+            raise VideoPrerequisiteError(
+                f"Display timezone {display_timezone!r} is unavailable"
+            ) from error
+        local_time = frame.forecast_time.astimezone(timezone)
+        utc_time = frame.forecast_time.astimezone(UTC)
+        label = (
+            f"{local_time:%d.%m.%Y %H:%M} {local_time.tzname() or display_timezone}"
+            f"  |  {utc_time:%H:%M UTC}"
+        )
+        with Image.open(source_path) as source:
+            image = source.convert("RGBA")
+        font_size = max(18, image.width // 48)
+        try:
+            font = ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", font_size
+            )
+        except OSError:
+            font = ImageFont.load_default()
+        overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        drawing = ImageDraw.Draw(overlay)
+        text_box = drawing.textbbox((0, 0), label, font=font)
+        text_width = text_box[2] - text_box[0]
+        text_height = text_box[3] - text_box[1]
+        padding_x = max(12, font_size // 2)
+        padding_y = max(8, font_size // 3)
+        left = max(16, image.width // 80)
+        bottom = image.height - max(16, image.height // 80)
+        top = bottom - text_height - padding_y * 2
+        right = min(image.width - 16, left + text_width + padding_x * 2)
+        drawing.rounded_rectangle(
+            (left, top, right, bottom),
+            radius=max(4, font_size // 5),
+            fill=(5, 7, 10, 205),
+        )
+        drawing.text(
+            (left + padding_x, top + padding_y - text_box[1]),
+            label,
+            font=font,
+            fill=(244, 246, 248, 255),
+        )
+        Image.alpha_composite(image, overlay).convert("RGB").save(
+            output_path,
+            format="JPEG",
+            quality=94,
+            optimize=True,
+        )
 
     def _ffmpeg_arguments(
         self,
@@ -370,6 +494,11 @@ class VideoGenerationService:
             frame
             for frame in run.frames
             if frame.validation_status == FrameValidationStatus.VALID
+            and frame.frame_index >= video.start_frame_index
+            and (
+                video.end_frame_index is None
+                or frame.frame_index <= video.end_frame_index
+            )
         )
         if video.mode == VideoMode.SQUARE:
             expected_width = expected_height = self.settings.square_video_size

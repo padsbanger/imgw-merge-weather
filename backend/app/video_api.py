@@ -12,6 +12,7 @@ from app.database import ForecastRepository, VideoRepository
 from app.models import VideoGenerationStatus
 from app.schemas import (
     VideoCreateRequest,
+    VideoDeleteResponse,
     VideoGenerationListResponse,
     VideoGenerationResponse,
     video_generation_response,
@@ -87,12 +88,41 @@ async def create_video(
             run_id=run_id,
             mode=payload.mode,
             fps=payload.fps,
+            start_frame_index=payload.start_frame_index,
+            end_frame_index=payload.end_frame_index,
+            timestamp_overlay=payload.timestamp_overlay,
         )
     except VideoGenerationConflictError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except VideoGenerationError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return video_generation_response(video)
+
+
+@router.delete("/api/videos/{video_id}", response_model=VideoDeleteResponse)
+async def delete_video(request: Request, video_id: VideoId) -> VideoDeleteResponse:
+    repository = _video_repository(request)
+    video = repository.get(video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video generation not found")
+    if video.status in {
+        VideoGenerationStatus.PENDING,
+        VideoGenerationStatus.RENDERING,
+    }:
+        raise HTTPException(status_code=409, detail="Active video generation cannot be deleted")
+    try:
+        output_path = resolve_video_output_path(
+            request.app.state.settings.output_dir, video.output_filename
+        )
+    except VideoGenerationError as error:
+        raise HTTPException(status_code=409, detail="Video output path is invalid") from error
+    try:
+        output_path.unlink(missing_ok=True)
+    except OSError as error:
+        raise HTTPException(status_code=500, detail="Video file could not be deleted") from error
+    if not repository.delete(video_id):
+        raise HTTPException(status_code=404, detail="Video generation not found")
+    return VideoDeleteResponse(video_id=video_id, status="deleted")
 
 
 @router.get("/api/videos/{video_id}/file", response_class=FileResponse)

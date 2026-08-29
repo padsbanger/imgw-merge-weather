@@ -11,6 +11,7 @@ import type {
 } from '../api/types'
 import { ForecastTimeline } from '../components/ForecastTimeline'
 import { RunSidebar } from '../components/RunSidebar'
+import { VideoDrawer } from '../components/VideoDrawer'
 import { WeatherFrameViewer } from '../components/WeatherFrameViewer'
 import { useCurrentTime } from '../hooks/useCurrentTime'
 import { useFramePlayback } from '../hooks/useFramePlayback'
@@ -95,6 +96,7 @@ function ForecastWorkspace({
     [requestedOffsetMinutes, run.frames, run.resolved_start_time],
   )
   const [selectedFrameIndex, setSelectedFrameIndex] = useState(initialFrameIndex)
+  const [videoDrawerOpen, setVideoDrawerOpen] = useState(false)
   const selectFrame = useCallback((frameIndex: number) => setSelectedFrameIndex(frameIndex), [])
   const playback = useFramePlayback(run.frames, selectedFrameIndex, selectFrame)
   const currentTime = useCurrentTime()
@@ -163,8 +165,15 @@ function ForecastWorkspace({
           serviceStatus={serviceStatus}
           backendState={backendState}
           selectedOffsetMinutes={selectedOffsetMinutes}
+          onOpenVideos={() => setVideoDrawerOpen(true)}
         />
       </main>
+
+      <VideoDrawer
+        run={run}
+        open={videoDrawerOpen}
+        onClose={() => setVideoDrawerOpen(false)}
+      />
 
       <div className="sr-only" aria-live="polite">
         {selectedFrame

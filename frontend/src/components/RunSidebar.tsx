@@ -16,6 +16,7 @@ interface RunSidebarProps {
   serviceStatus: ServiceStatusResponse | undefined
   backendState: 'checking' | 'online' | 'offline'
   selectedOffsetMinutes: number | null
+  onOpenVideos: () => void
 }
 
 export function RunSidebar({
@@ -26,6 +27,7 @@ export function RunSidebar({
   serviceStatus,
   backendState,
   selectedOffsetMinutes,
+  onOpenVideos,
 }: RunSidebarProps) {
   const isLatest = run.run_id === latestRunId
   return (
@@ -81,7 +83,16 @@ export function RunSidebar({
           <div>
             <span>SCHEDULER</span>
             <strong>{serviceStatus?.scheduler.state.toUpperCase() ?? 'CHECKING'}</strong>
-            <small>{serviceStatus?.scheduler.enabled ? 'automatic' : 'manual refresh'}</small>
+            <small>
+              {serviceStatus?.scheduler.enabled
+                ? serviceStatus.scheduler.next_run_at
+                  ? `next ${formatLocalTime(
+                      serviceStatus.scheduler.next_run_at,
+                      run.display_timezone,
+                    )}`
+                  : 'schedule pending'
+                : 'manual refresh'}
+            </small>
           </div>
         </div>
         {serviceStatus?.last_imgw_error ? (
@@ -137,6 +148,15 @@ export function RunSidebar({
             <dd>{run.source}</dd>
           </div>
         </dl>
+        <div className="run-actions">
+          <button
+            type="button"
+            onClick={onOpenVideos}
+            disabled={run.status !== 'completed'}
+          >
+            Generate video
+          </button>
+        </div>
       </section>
 
       <section className="run-browser" id="forecast-runs">

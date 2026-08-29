@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -8,6 +8,8 @@ import type {
   ForecastRunDetail,
   ForecastRunListResponse,
   ServiceStatusResponse,
+  VideoCreateRequest,
+  VideoGeneration,
 } from './api/types'
 import App from './App'
 
@@ -97,7 +99,7 @@ function makeServiceStatus(): ServiceStatusResponse {
   return {
     service: 'imgw-merge-weather',
     version: '0.1.0',
-    milestone: 9,
+    milestone: 11,
     server_time: '2026-08-29T10:02:00Z',
     weather_data_available: true,
     refresh_in_progress: false,
@@ -106,6 +108,82 @@ function makeServiceStatus(): ServiceStatusResponse {
     last_imgw_error: null,
     scheduler: { enabled: false, state: 'disabled', next_run_at: null },
   }
+}
+
+function makeVideo(
+  videoId = 'video_complete1',
+  status: VideoGeneration['status'] = 'completed',
+): VideoGeneration {
+  const completed = status === 'completed'
+  return {
+    video_id: videoId,
+    run_id: 'merge_latest',
+    created_at: '2026-08-29T10:03:00Z',
+    updated_at: '2026-08-29T10:03:01Z',
+    status,
+    mode: 'source',
+    fps: 5,
+    codec: 'libx264',
+    crf: 20,
+    preset: 'medium',
+    output_filename: `${videoId}.mp4`,
+    start_frame_index: 0,
+    end_frame_index: 2,
+    timestamp_overlay: false,
+    width: completed ? 1700 : null,
+    height: completed ? 1600 : null,
+    duration_seconds: completed ? 0.6 : null,
+    size_bytes: completed ? 2_100 : null,
+    error: null,
+    detail_url: `/api/videos/${videoId}`,
+    file_url: completed ? `/api/videos/${videoId}/file` : null,
+  }
+}
+
+function mockVideoApi() {
+  const run = makeRun()
+  const listing = makeRunList(run)
+  let videos = [makeVideo()]
+  const createRequests: VideoCreateRequest[] = []
+  const deletedIds: string[] = []
+
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/runs/latest' || path === `/api/runs/${run.run_id}`) {
+        return jsonResponse(run)
+      }
+      if (path === '/api/runs?limit=20') return jsonResponse(listing)
+      if (path === '/api/status') return jsonResponse(makeServiceStatus())
+      if (path === '/api/videos?limit=50&run_id=merge_latest') {
+        return jsonResponse({ videos, count: videos.length })
+      }
+      if (path === '/api/runs/merge_latest/videos' && init?.method === 'POST') {
+        const request = JSON.parse(String(init.body)) as VideoCreateRequest
+        createRequests.push(request)
+        const pending = {
+          ...makeVideo('video_pending1', 'pending'),
+          mode: request.mode,
+          fps: request.fps,
+          start_frame_index: request.start_frame_index,
+          end_frame_index: request.end_frame_index,
+          timestamp_overlay: request.timestamp_overlay,
+        }
+        videos = [pending, ...videos]
+        return jsonResponse(pending, true, 202)
+      }
+      const deleteMatch = path.match(/^\/api\/videos\/(video_[a-z0-9]+)$/)
+      if (deleteMatch && init?.method === 'DELETE') {
+        deletedIds.push(deleteMatch[1])
+        videos = videos.filter((video) => video.video_id !== deleteMatch[1])
+        return jsonResponse({ video_id: deleteMatch[1], status: 'deleted' })
+      }
+      return jsonResponse({ detail: 'Not found' }, false, 404)
+    }),
+  )
+
+  return { createRequests, deletedIds }
 }
 
 function mockForecastApi(
@@ -358,6 +436,81 @@ describe('weather viewer', () => {
     expect(screen.getByText('ACTIVE')).toBeInTheDocument()
     expect(screen.getByText('LAST IMGW ERROR')).toBeInTheDocument()
     expect(screen.getByText('IMGW returned HTTP 503')).toBeInTheDocument()
+  })
+
+  it('shows the next automatic forecast refresh in Warsaw time', async () => {
+    const status = makeServiceStatus()
+    status.scheduler = {
+      enabled: true,
+      state: 'running',
+      next_run_at: '2026-08-29T10:12:00Z',
+    }
+    mockForecastApi(makeRun(), true, status)
+    renderApp()
+
+    await screen.findByRole('img', { name: /12:00/ })
+    expect(screen.getByText('RUNNING')).toBeInTheDocument()
+    expect(screen.getByText('next 12:12')).toBeInTheDocument()
+  })
+
+  it('generates a selected video range and keeps the weather viewer secondary', async () => {
+    const api = mockVideoApi()
+    renderApp()
+
+    await screen.findByRole('img', { name: /12:00/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Generate video' }))
+
+    expect(screen.getByRole('dialog', { name: 'Forecast videos' })).toBeInTheDocument()
+    expect(await screen.findByLabelText('source generated forecast video')).toHaveAttribute(
+      'src',
+      '/api/videos/video_complete1/file',
+    )
+    expect(screen.getByRole('link', { name: 'Download' })).toHaveAttribute(
+      'href',
+      '/api/videos/video_complete1/file',
+    )
+
+    fireEvent.click(screen.getByRole('radio', { name: /1:1/ }))
+    fireEvent.change(screen.getByLabelText('Video range start'), {
+      target: { value: '1' },
+    })
+    fireEvent.change(screen.getByLabelText('Video range end'), {
+      target: { value: '2' },
+    })
+    fireEvent.change(screen.getByLabelText('Video FPS'), { target: { value: '7' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Timestamp overlay' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Generate MP4' }))
+
+    expect(await screen.findByText('Queued for rendering…')).toBeInTheDocument()
+    expect(api.createRequests).toEqual([
+      {
+        mode: '1:1',
+        fps: 7,
+        start_frame_index: 1,
+        end_frame_index: 2,
+        timestamp_overlay: true,
+      },
+    ])
+    expect(screen.getByRole('img', { name: /12:00/ })).toBeInTheDocument()
+  })
+
+  it('requires confirmation before deleting a completed video', async () => {
+    const api = mockVideoApi()
+    renderApp()
+
+    await screen.findByRole('img', { name: /12:00/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Generate video' }))
+    await screen.findByLabelText('source generated forecast video')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(screen.getByRole('button', { name: 'Confirm delete' })).toBeInTheDocument()
+    expect(api.deletedIds).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText('source generated forecast video')).not.toBeInTheDocument()
+    })
+    expect(api.deletedIds).toEqual(['video_complete1'])
   })
 
   it('shows explicit loading and backend error states', async () => {

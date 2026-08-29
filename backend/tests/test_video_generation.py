@@ -34,6 +34,9 @@ class StubVideoService:
         run_id: str,
         mode: VideoMode,
         fps: int,
+        start_frame_index: int | None,
+        end_frame_index: int | None,
+        timestamp_overlay: bool,
     ) -> VideoGeneration:
         video = VideoGeneration(
             video_id="video_coord001",
@@ -45,6 +48,9 @@ class StubVideoService:
             crf=20,
             preset="medium",
             output_filename="video_coord001.mp4",
+            start_frame_index=start_frame_index or 0,
+            end_frame_index=end_frame_index,
+            timestamp_overlay=timestamp_overlay,
         )
         self.repository.upsert(video)
         return video

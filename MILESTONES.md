@@ -439,8 +439,9 @@ The latest temporally fresh run is labeled `LIVE`; a fresh historical run remain
 `FRESH`. The backend supplies centralized `FRESH`, `DELAYED`, and `STALE` classification,
 while the UI adds `OFFLINE` when status polling fails and continues to label any cached
 imagery honestly. The header clock updates in `Europe/Warsaw`. Source time is shown in
-both Warsaw and UTC, and the compact live-data panel exposes age, reachability, manual
-refresh activity/result, last IMGW error, and the explicitly disabled scheduler state.
+both Warsaw and UTC, and the compact live-data panel exposes age, reachability, refresh
+activity/result, last IMGW error, scheduler state, and the next automatic run when
+scheduling is enabled.
 
 ---
 
@@ -559,6 +560,8 @@ are available through typed REST and CLI contracts.
 
 # Milestone 10 — Video UI
 
+**Status:** Complete (2026-08-29)
+
 ## Goal
 
 Integrate video generation without turning the application into a video-job dashboard.
@@ -573,27 +576,37 @@ Generate video
 
 Configuration drawer/modal:
 
-- [ ] run
-- [ ] range
-- [ ] FPS
-- [ ] output format
-- [ ] optional timestamp overlay
+- [x] run
+- [x] range
+- [x] FPS
+- [x] output format
+- [x] optional timestamp overlay
 
 Video outputs:
 
-- [ ] progress
-- [ ] native HTML5 player
-- [ ] download
-- [ ] delete
-- [ ] metadata
+- [x] progress
+- [x] native HTML5 player
+- [x] download
+- [x] delete
+- [x] metadata
 
 ## Acceptance Criteria
 
 Video generation is available, but the main weather viewer remains the dominant UI.
 
+The current run panel exposes one compact `Generate video` action. It opens a responsive
+drawer over the existing weather workspace with an explicit frame range, validated FPS,
+source or padded 1080×1080 output previews, and an optional Warsaw/UTC timestamp overlay.
+Active generations poll in the drawer; completed artifacts use native browser playback
+and expose range, FPS, size, dimensions, duration, overlay state, download, and
+confirmation-protected deletion. Timestamp overlays are rendered onto staging copies,
+so the persisted IMGW source frames remain unmodified.
+
 ---
 
 # Milestone 11 — Automatic Refresh
+
+**Status:** Complete (2026-08-29)
 
 ## Goal
 
@@ -609,10 +622,10 @@ Default disabled:
 SCHEDULER_ENABLED=false
 ```
 
-Recommended production schedule:
+Configured production schedule:
 
 ```text
-2,12,22,32,42,52 * * * *
+2 * * * *
 ```
 
 Flow:
@@ -626,15 +639,24 @@ probe latest
 
 Requirements:
 
-- [ ] prevent overlapping refreshes
-- [ ] prevent duplicate runs
-- [ ] log skipped refreshes
-- [ ] expose next scheduled run
-- [ ] expose last IMGW error
+- [x] prevent overlapping refreshes
+- [x] prevent duplicate runs
+- [x] log skipped refreshes
+- [x] expose next scheduled run
+- [x] expose last IMGW error
 
 ## Acceptance Criteria
 
 A homelab instance can remain current without manual intervention.
+
+An asyncio-native APScheduler job is created with one in-memory cron trigger, UTC-aware
+fire times, coalescing, and a single allowed instance. The existing refresh coordinator
+remains the shared overlap guard for scheduled and manual work. Before ingestion, a
+conservative boundary probe compares validated remote frame hashes with the latest
+completed snapshot; unchanged forecasts are logged and persisted as a `skipped` refresh
+without creating a run or downloading all 49 frames. New runs reuse the validated probe
+frames. `/api/status` exposes scheduler state, the next run, the last refresh result,
+and the persisted last IMGW error. Scheduling remains disabled by default.
 
 ---
 
