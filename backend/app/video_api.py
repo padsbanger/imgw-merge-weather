@@ -87,7 +87,9 @@ async def create_video(
         video = await _coordinator(request).start(
             run_id=run_id,
             mode=payload.mode,
-            fps=payload.fps,
+            source_fps=payload.source_fps,
+            output_fps=payload.output_fps,
+            interpolation=payload.interpolation,
             start_frame_index=payload.start_frame_index,
             end_frame_index=payload.end_frame_index,
             timestamp_overlay=payload.timestamp_overlay,

@@ -387,6 +387,10 @@ navigation. Local `Europe/Warsaw` time, UTC source time, forecast offset, freshn
 latest-run state, run metadata, and recent historical runs remain visible around the
 undistorted forecast image.
 
+The original single-frame browser viewer was superseded after Milestone 10 by the
+video-only forecast workspace. Raw frames remain validated ingestion inputs, but the
+browser no longer requests or renders their JPEG endpoints.
+
 ---
 
 # Milestone 7 — Freshness and Live Data UX
@@ -599,8 +603,12 @@ drawer over the existing weather workspace with an explicit frame range, validat
 source or padded 1080×1080 output previews, and an optional Warsaw/UTC timestamp overlay.
 Active generations poll in the drawer; completed artifacts use native browser playback
 and expose range, FPS, size, dimensions, duration, overlay state, download, and
-confirmation-protected deletion. Timestamp overlays are rendered onto staging copies,
-so the persisted IMGW source frames remain unmodified.
+confirmation-protected deletion. The newest completed video for the selected run is
+embedded in the main viewer. The forecast timeline, scrubber, previous/next, play/pause,
+spacebar, and arrow-key controls seek and operate that MP4 directly using its encoded
+frame range and FPS. The browser does not request individual JPEG frames; a run without
+a completed MP4 shows explicit generation/rendering state. Timestamp overlays are
+rendered onto staging copies, so the persisted IMGW source frames remain unmodified.
 
 ---
 
@@ -635,6 +643,7 @@ probe latest
 → detect whether publication is new
 → ingest
 → update latest pointer
+→ optionally enqueue one default video
 ```
 
 Requirements:
@@ -644,6 +653,7 @@ Requirements:
 - [x] log skipped refreshes
 - [x] expose next scheduled run
 - [x] expose last IMGW error
+- [x] optionally generate and startup-reconcile the latest forecast video
 
 ## Acceptance Criteria
 

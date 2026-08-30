@@ -18,7 +18,10 @@ from app.persistence import initialize_forecast_persistence
 from app.scheduler import AutomaticRefreshScheduler
 from app.schemas import HealthResponse, SchedulerStatusResponse, ServiceStatusResponse
 from app.services.refresh import RefreshCoordinator, ingest_latest_forecast
-from app.services.video_generation import VideoGenerationCoordinator
+from app.services.video_generation import (
+    VideoGenerationCoordinator,
+    ensure_forecast_video,
+)
 from app.video import VideoGenerationService
 from app.video_api import router as video_router
 
@@ -44,10 +47,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             database_path=app_settings.database_path,
             runs_directory=app_settings.runs_dir,
         )
-        refresh_coordinator = RefreshCoordinator(
-            lambda: ingest_latest_forecast(app_settings, repository),
-            repository=repository,
-        )
         video_repository = VideoRepository(repository.database)
         video_repository.recover_interrupted()
         video_service = VideoGenerationService(
@@ -59,6 +58,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             service=video_service,
             repository=video_repository,
         )
+
+        async def refresh_and_generate_video():
+            outcome = await ingest_latest_forecast(app_settings, repository)
+            await ensure_forecast_video(
+                outcome.run,
+                enabled=app_settings.video_auto_generate,
+                repository=video_repository,
+                coordinator=video_coordinator,
+            )
+            return outcome
+
+        refresh_coordinator = RefreshCoordinator(
+            refresh_and_generate_video,
+            repository=repository,
+        )
         automatic_scheduler = AutomaticRefreshScheduler(
             app_settings,
             refresh_coordinator,
@@ -68,13 +82,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan_app.state.video_repository = video_repository
         lifespan_app.state.video_coordinator = video_coordinator
         lifespan_app.state.automatic_scheduler = automatic_scheduler
+        await ensure_forecast_video(
+            repository.get_latest_completed_run(),
+            enabled=app_settings.video_auto_generate,
+            repository=video_repository,
+            coordinator=video_coordinator,
+        )
         automatic_scheduler.start()
         try:
             yield
         finally:
             automatic_scheduler.shutdown()
-            await video_coordinator.shutdown()
             await refresh_coordinator.shutdown()
+            await video_coordinator.shutdown()
 
     application = FastAPI(
         title=app_settings.app_name,

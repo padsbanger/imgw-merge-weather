@@ -10,7 +10,7 @@ from app.forecast import to_utc
 from app.models import ForecastRun
 
 FRESH_MAX_AGE_SECONDS = 15 * 60
-DELAYED_MAX_AGE_SECONDS = 30 * 60
+DELAYED_MAX_AGE_SECONDS = 60 * 60
 
 
 class FreshnessState(StrEnum):

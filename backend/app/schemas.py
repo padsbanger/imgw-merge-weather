@@ -13,7 +13,9 @@ from app.models import (
     FrameValidationStatus,
     VideoGeneration,
     VideoGenerationStatus,
+    VideoInterpolation,
     VideoMode,
+    VideoSmoothing,
 )
 
 
@@ -106,7 +108,9 @@ class RefreshAcceptedResponse(BaseModel):
 
 class VideoCreateRequest(BaseModel):
     mode: VideoMode = VideoMode.SOURCE
-    fps: int | None = Field(default=None, ge=1, le=30)
+    source_fps: int | None = Field(default=None, ge=1, le=10)
+    output_fps: int | None = Field(default=None, ge=15, le=60)
+    interpolation: VideoSmoothing | None = None
     start_frame_index: int | None = Field(default=None, ge=0, le=10_000)
     end_frame_index: int | None = Field(default=None, ge=0, le=10_000)
     timestamp_overlay: bool = False
@@ -129,7 +133,9 @@ class VideoGenerationResponse(BaseModel):
     updated_at: datetime
     status: VideoGenerationStatus
     mode: VideoMode
-    fps: int
+    source_fps: int
+    output_fps: int
+    interpolation: VideoInterpolation
     codec: str
     crf: int
     preset: str

@@ -39,13 +39,13 @@ export function formatUtcTime(timestamp: string): string {
 
 export function formatForecastOffset(timestamp: string, startTimestamp: string | null): string {
   if (startTimestamp === null) return '—'
-  const minutes = Math.max(
-    0,
-    Math.round((new Date(timestamp).getTime() - new Date(startTimestamp).getTime()) / 60_000),
+  const offsetMinutes = Math.round(
+    (new Date(timestamp).getTime() - new Date(startTimestamp).getTime()) / 60_000,
   )
+  const minutes = Math.abs(offsetMinutes)
   const hoursPart = Math.floor(minutes / 60).toString().padStart(2, '0')
   const minutesPart = (minutes % 60).toString().padStart(2, '0')
-  return `+${hoursPart}:${minutesPart}`
+  return `${offsetMinutes < 0 ? '-' : '+'}${hoursPart}:${minutesPart}`
 }
 
 export function formatAge(ageSeconds: number): string {

@@ -36,13 +36,18 @@ class Settings(BaseSettings):
     min_frame_height: int = Field(default=100, ge=1)
     frame_interval_minutes: int = Field(default=10, ge=1, le=60)
     forecast_hours: int = Field(default=8, ge=1, le=24)
+    forecast_lookback_hours: int = Field(default=2, ge=0, le=6)
     max_start_fallback_steps: int = Field(default=6, ge=0, le=12)
     allow_missing_frames: bool = False
     min_frame_coverage: float = Field(default=0.90, ge=0.0, le=1.0)
     scheduler_enabled: bool = False
     scheduler_cron: str = "2 * * * *"
     scheduler_misfire_grace_seconds: int = Field(default=60, ge=1, le=600)
-    video_fps: int = Field(default=5, ge=1, le=30)
+    video_source_fps: int = Field(default=3, ge=1, le=10)
+    video_output_fps: int = Field(default=30, ge=15, le=60)
+    video_interpolation: Literal["none", "crossfade"] = "crossfade"
+    video_auto_generate: bool = False
+    video_max_concurrent_renders: int = Field(default=1, ge=1, le=4)
     video_codec: Literal["libx264"] = "libx264"
     video_crf: int = Field(default=20, ge=0, le=51)
     video_preset: Literal[

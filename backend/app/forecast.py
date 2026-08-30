@@ -100,20 +100,24 @@ def build_frame_times(
     start_time: datetime,
     *,
     horizon_hours: int = DEFAULT_FORECAST_HOURS,
+    lookback_hours: int = 0,
     interval_minutes: int = DEFAULT_FRAME_INTERVAL_MINUTES,
 ) -> list[datetime]:
-    """Build an inclusive, ordered forecast sequence in canonical UTC."""
+    """Build an inclusive sequence around a resolved forecast-cycle timestamp."""
 
     start_utc = to_utc(start_time)
     if horizon_hours <= 0:
         raise ForecastTimeError("Forecast horizon must be greater than zero")
+    if lookback_hours < 0:
+        raise ForecastTimeError("Forecast lookback must not be negative")
     if interval_minutes <= 0:
         raise ForecastTimeError("Frame interval must be greater than zero")
 
     interval = timedelta(minutes=interval_minutes)
-    horizon = timedelta(hours=horizon_hours)
-    steps = horizon // interval
-    return [start_utc + index * interval for index in range(steps + 1)]
+    sequence_start = start_utc - timedelta(hours=lookback_hours)
+    window = timedelta(hours=horizon_hours + lookback_hours)
+    steps = window // interval
+    return [sequence_start + index * interval for index in range(steps + 1)]
 
 
 async def probe_latest_available_frame(
@@ -173,6 +177,7 @@ async def probe_latest_complete_sequence(
     *,
     now: datetime,
     horizon_hours: int = DEFAULT_FORECAST_HOURS,
+    lookback_hours: int = 0,
     interval_minutes: int = DEFAULT_FRAME_INTERVAL_MINUTES,
     max_fallback_steps: int = DEFAULT_MAX_START_FALLBACK_STEPS,
 ) -> CompleteSequenceProbe:
@@ -187,6 +192,8 @@ async def probe_latest_complete_sequence(
 
     if horizon_hours <= 0:
         raise ForecastTimeError("Forecast horizon must be greater than zero")
+    if lookback_hours < 0:
+        raise ForecastTimeError("Forecast lookback must not be negative")
     if max_fallback_steps < 0:
         raise ForecastTimeError("Maximum fallback steps must not be negative")
 
@@ -198,10 +205,15 @@ async def probe_latest_complete_sequence(
         candidate_start = expected_start - timedelta(
             minutes=interval_minutes * fallback_steps
         )
+        candidate_begin = candidate_start - timedelta(hours=lookback_hours)
         candidate_end = candidate_start + timedelta(hours=horizon_hours)
         attempted_starts.append(candidate_start)
 
         try:
+            if candidate_begin not in prefetched_frames:
+                prefetched_frames[candidate_begin] = await client.fetch_frame(
+                    candidate_begin
+                )
             if candidate_start not in prefetched_frames:
                 prefetched_frames[candidate_start] = await client.fetch_frame(candidate_start)
             if candidate_end not in prefetched_frames:
@@ -210,8 +222,9 @@ async def probe_latest_complete_sequence(
             if error.status_code != 404:
                 raise
             LOGGER.info(
-                "event=complete_start_probe start_time=%s end_time=%s "
+                "event=complete_start_probe begin_time=%s start_time=%s end_time=%s "
                 "status=unavailable fallback_step=%d",
+                candidate_begin.isoformat(),
                 candidate_start.isoformat(),
                 candidate_end.isoformat(),
                 fallback_steps,
@@ -222,6 +235,7 @@ async def probe_latest_complete_sequence(
             build_frame_times(
                 candidate_start,
                 horizon_hours=horizon_hours,
+                lookback_hours=lookback_hours,
                 interval_minutes=interval_minutes,
             )
         )
@@ -231,8 +245,9 @@ async def probe_latest_complete_sequence(
             if timestamp in selected_times
         }
         LOGGER.info(
-            "event=complete_start_probe start_time=%s end_time=%s "
+            "event=complete_start_probe begin_time=%s start_time=%s end_time=%s "
             "status=success fallback_step=%d",
+            candidate_begin.isoformat(),
             candidate_start.isoformat(),
             candidate_end.isoformat(),
             fallback_steps,

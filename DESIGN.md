@@ -245,14 +245,20 @@ Avoid large marketing-style 48–72 px headings.
 
 The viewer is the primary component.
 
+Render the selected run's newest completed forecast video inside a centered 1:1 stage.
+The MP4 must preserve its source aspect ratio with `object-fit: contain`; fill the stage
+and any unused viewer area with solid black rather than stretching or cropping
+meteorological imagery. Raw IMGW JPEGs remain ingestion inputs and are not rendered by
+the browser UI.
+
 Responsibilities:
 
-- show selected IMGW frame,
-- maintain image aspect ratio,
+- show the selected run's forecast video,
+- maintain video aspect ratio,
 - allow fit-to-container,
 - expose current frame time,
 - expose forecast offset,
-- support animation,
+- support MP4 playback,
 - support timeline selection,
 - support historical run selection.
 
@@ -338,7 +344,10 @@ Initial capabilities:
 
 Avoid overly large media controls.
 
-Native video controls are appropriate for generated MP4 files, but the interactive frame viewer should use custom minimal weather controls.
+The custom weather controls operate the embedded MP4 directly. Timeline selection seeks
+to the encoded forecast timestamp; previous/next step through encoded forecast times;
+play/pause and keyboard controls operate the same video element. Avoid a second set of
+native media controls in the primary viewer.
 
 ---
 
@@ -389,8 +398,8 @@ Suggested initial thresholds:
 
 ```text
 FRESH      < 15 min
-DELAYED    15–30 min
-STALE      > 30 min
+DELAYED    15–60 min
+STALE      > 60 min
 ```
 
 Use compact status indicators.
@@ -494,7 +503,9 @@ Suggested fields:
 ```text
 Forecast run
 Range
-FPS
+Animation speed
+Motion smoothing
+Output FPS (advanced)
 Format
 Timestamp overlay
 ```
@@ -542,6 +553,16 @@ This is more useful than a plain text dropdown once multiple presets exist.
 
 Generated videos should live in a secondary view/panel.
 
+On initial load, rank forecast runs newest-first and open the newest run that owns a
+completed MP4; artifact creation time must not make an older forecast appear newer.
+When automatic video generation is enabled, each refreshed latest run receives one
+default source MP4, and startup reconciles a missing video for the latest completed run.
+When a selected forecast run has a completed video, its newest completed MP4 is embedded in the main
+weather viewer. The browser UI is video-only: it does not request or display
+individual IMGW JPEGs. Runs without a completed MP4 show an explicit generation or
+rendering state. Generation history, metadata, deletion, and other job controls remain
+in the secondary panel.
+
 Display:
 
 ```text
@@ -549,7 +570,8 @@ Display:
 11:20 → 19:20
 
 1:1 · 1080×1080
-5 FPS
+3 source frames/s · 30 FPS output
+Crossfade
 2.8 MB
 
 [ Play ] [ Download ] [ Delete ]

@@ -15,10 +15,11 @@ from app.models import (
     FrameValidationStatus,
     VideoGeneration,
     VideoGenerationStatus,
+    VideoInterpolation,
     VideoMode,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 INTERRUPTED_RUN_STATUSES = (
     ForecastRunStatus.PENDING,
     ForecastRunStatus.PROBING,
@@ -69,6 +70,9 @@ class Database:
                 version = 2
             if version == 2:
                 self._apply_version_3(connection)
+                version = 3
+            if version == 3:
+                self._apply_version_4(connection)
 
     @staticmethod
     def _apply_version_1(connection: sqlite3.Connection) -> None:
@@ -197,6 +201,40 @@ class Database:
                 CHECK (timestamp_overlay IN (0, 1));
 
             PRAGMA user_version = 3;
+            COMMIT;
+            """
+        )
+
+    @staticmethod
+    def _apply_version_4(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            BEGIN IMMEDIATE;
+
+            DROP INDEX video_generations_active_idx;
+            ALTER TABLE video_generations RENAME COLUMN fps TO source_fps;
+            ALTER TABLE video_generations
+                ADD COLUMN output_fps INTEGER NOT NULL DEFAULT 30
+                CHECK (output_fps >= 15 AND output_fps <= 60);
+            ALTER TABLE video_generations
+                ADD COLUMN interpolation TEXT NOT NULL DEFAULT 'none'
+                CHECK (interpolation IN ('none', 'crossfade', 'motion'));
+            UPDATE video_generations
+            SET output_fps = CASE
+                    WHEN source_fps < 15 THEN 15
+                    ELSE source_fps
+                END,
+                source_fps = CASE
+                    WHEN source_fps > 10 THEN 10
+                    ELSE source_fps
+                END;
+            CREATE INDEX video_generations_active_idx
+                ON video_generations(
+                    run_id, mode, source_fps, output_fps, interpolation
+                )
+                WHERE status IN ('pending', 'rendering');
+
+            PRAGMA user_version = 4;
             COMMIT;
             """
         )
@@ -401,7 +439,9 @@ class VideoRepository:
         "updated_at",
         "status",
         "mode",
-        "fps",
+        "source_fps",
+        "output_fps",
+        "interpolation",
         "codec",
         "crf",
         "preset",
@@ -468,18 +508,27 @@ class VideoRepository:
         *,
         run_id: str,
         mode: VideoMode,
-        fps: int,
+        source_fps: int,
+        output_fps: int,
+        interpolation: VideoInterpolation,
     ) -> VideoGeneration | None:
         with self.database.connect() as connection:
             row = connection.execute(
                 """
                 SELECT * FROM video_generations
-                WHERE run_id = ? AND mode = ? AND fps = ?
+                WHERE run_id = ? AND mode = ? AND source_fps = ?
+                  AND output_fps = ? AND interpolation = ?
                   AND status IN ('pending', 'rendering')
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
-                (run_id, mode.value, fps),
+                (
+                    run_id,
+                    mode.value,
+                    source_fps,
+                    output_fps,
+                    interpolation.value,
+                ),
             ).fetchone()
         return self._hydrate(row) if row is not None else None
 

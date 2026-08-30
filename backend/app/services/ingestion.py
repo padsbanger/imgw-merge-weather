@@ -83,6 +83,7 @@ class ForecastIngestionService:
         data_dir: Path,
         interval_minutes: int = 10,
         forecast_hours: int = 8,
+        lookback_hours: int = 0,
         max_start_fallback_steps: int = 6,
         allow_missing_frames: bool = False,
         minimum_frame_coverage: float = 0.90,
@@ -96,6 +97,7 @@ class ForecastIngestionService:
         self.data_dir = Path(data_dir)
         self.interval_minutes = interval_minutes
         self.forecast_hours = forecast_hours
+        self.lookback_hours = lookback_hours
         self.max_start_fallback_steps = max_start_fallback_steps
         self.allow_missing_frames = allow_missing_frames
         self.minimum_frame_coverage = minimum_frame_coverage
@@ -151,6 +153,7 @@ class ForecastIngestionService:
                     self.client,
                     now=discovered_at,
                     horizon_hours=self.forecast_hours,
+                    lookback_hours=self.lookback_hours,
                     interval_minutes=self.interval_minutes,
                     max_fallback_steps=self.max_start_fallback_steps,
                 )
@@ -162,6 +165,7 @@ class ForecastIngestionService:
             frame_times = build_frame_times(
                 resolved_start,
                 horizon_hours=self.forecast_hours,
+                lookback_hours=self.lookback_hours,
                 interval_minutes=self.interval_minutes,
             )
             run.resolved_start_time = resolved_start

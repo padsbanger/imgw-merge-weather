@@ -30,7 +30,9 @@ def make_run() -> ForecastRun:
         (899, FreshnessState.FRESH),
         (900, FreshnessState.DELAYED),
         (1800, FreshnessState.DELAYED),
-        (1801, FreshnessState.STALE),
+        (3599, FreshnessState.DELAYED),
+        (3600, FreshnessState.DELAYED),
+        (3601, FreshnessState.STALE),
     ],
 )
 def test_freshness_thresholds(age_seconds: int, expected_state: FreshnessState) -> None:

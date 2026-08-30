@@ -13,7 +13,9 @@ from app.models import (
     ForecastRunStatus,
     VideoGeneration,
     VideoGenerationStatus,
+    VideoInterpolation,
     VideoMode,
+    VideoSmoothing,
 )
 
 START = datetime(2026, 8, 29, 10, 0, tzinfo=UTC)
@@ -51,7 +53,9 @@ def video(
         updated_at=START,
         status=status,
         mode=VideoMode.SOURCE,
-        fps=5,
+        source_fps=3,
+        output_fps=30,
+        interpolation=VideoInterpolation.CROSSFADE,
         codec="libx264",
         crf=20,
         preset="medium",
@@ -67,7 +71,16 @@ class StubVideoCoordinator:
     def __init__(self, pending: VideoGeneration) -> None:
         self.pending = pending
         self.calls: list[
-            tuple[str, VideoMode, int | None, int | None, int | None, bool]
+            tuple[
+                str,
+                VideoMode,
+                int | None,
+                int | None,
+                VideoSmoothing | None,
+                int | None,
+                int | None,
+                bool,
+            ]
         ] = []
 
     async def start(
@@ -75,7 +88,9 @@ class StubVideoCoordinator:
         *,
         run_id: str,
         mode: VideoMode,
-        fps: int | None,
+        source_fps: int | None,
+        output_fps: int | None,
+        interpolation: VideoSmoothing | None,
         start_frame_index: int | None,
         end_frame_index: int | None,
         timestamp_overlay: bool,
@@ -84,7 +99,9 @@ class StubVideoCoordinator:
             (
                 run_id,
                 mode,
-                fps,
+                source_fps,
+                output_fps,
+                interpolation,
                 start_frame_index,
                 end_frame_index,
                 timestamp_overlay,
@@ -115,7 +132,9 @@ def test_video_api_starts_typed_background_generation_and_validates_input(
             "/api/runs/merge_video_api/videos",
             json={
                 "mode": "1:1",
-                "fps": 7,
+                "source_fps": 5,
+                "output_fps": 60,
+                "interpolation": "none",
                 "start_frame_index": 2,
                 "end_frame_index": 20,
                 "timestamp_overlay": True,
@@ -124,8 +143,14 @@ def test_video_api_starts_typed_background_generation_and_validates_input(
         invalid_mode = client.post(
             "/api/runs/merge_video_api/videos", json={"mode": "stretch"}
         )
-        invalid_fps = client.post(
-            "/api/runs/merge_video_api/videos", json={"fps": 0}
+        invalid_source_fps = client.post(
+            "/api/runs/merge_video_api/videos", json={"source_fps": 0}
+        )
+        invalid_output_fps = client.post(
+            "/api/runs/merge_video_api/videos", json={"output_fps": 61}
+        )
+        invalid_interpolation = client.post(
+            "/api/runs/merge_video_api/videos", json={"interpolation": "motion"}
         )
         invalid_range = client.post(
             "/api/runs/merge_video_api/videos",
@@ -138,11 +163,25 @@ def test_video_api_starts_typed_background_generation_and_validates_input(
     assert response.status_code == 202
     assert response.json()["status"] == "pending"
     assert response.json()["file_url"] is None
+    assert response.json()["source_fps"] == 3
+    assert response.json()["output_fps"] == 30
+    assert response.json()["interpolation"] == "crossfade"
     assert coordinator.calls == [
-        ("merge_video_api", VideoMode.SQUARE, 7, 2, 20, True)
+        (
+            "merge_video_api",
+            VideoMode.SQUARE,
+            5,
+            60,
+            VideoSmoothing.NONE,
+            2,
+            20,
+            True,
+        )
     ]
     assert invalid_mode.status_code == 422
-    assert invalid_fps.status_code == 422
+    assert invalid_source_fps.status_code == 422
+    assert invalid_output_fps.status_code == 422
+    assert invalid_interpolation.status_code == 422
     assert invalid_range.status_code == 422
     assert missing_run.status_code == 404
 

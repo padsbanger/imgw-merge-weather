@@ -25,6 +25,7 @@ from app.models import (
     VideoGeneration,
     VideoGenerationStatus,
     VideoMode,
+    VideoSmoothing,
 )
 from app.persistence import initialize_forecast_persistence
 from app.services.ingestion import ForecastIngestionService
@@ -102,7 +103,14 @@ def _add_video_arguments(parser: argparse.ArgumentParser) -> None:
         default=VideoMode.SOURCE,
         help="output framing mode",
     )
-    parser.add_argument("--fps", type=int, help="frames per second (1-30)")
+    parser.add_argument("--source-fps", type=int, help="animation speed (1-10)")
+    parser.add_argument("--output-fps", type=int, help="output frame rate (15-60)")
+    parser.add_argument(
+        "--interpolation",
+        type=VideoSmoothing,
+        choices=list(VideoSmoothing),
+        help="visual smoothing mode",
+    )
     parser.add_argument("--start-frame", type=int, help="first frame index to include")
     parser.add_argument("--end-frame", type=int, help="last frame index to include")
     parser.add_argument(
@@ -180,6 +188,7 @@ async def refresh_forecast(start_time: datetime | None, settings: Settings) -> F
             data_dir=settings.data_dir,
             interval_minutes=settings.frame_interval_minutes,
             forecast_hours=settings.forecast_hours,
+            lookback_hours=settings.forecast_lookback_hours,
             max_start_fallback_steps=settings.max_start_fallback_steps,
             allow_missing_frames=settings.allow_missing_frames,
             minimum_frame_coverage=settings.min_frame_coverage,
@@ -212,7 +221,9 @@ async def generate_video(
     *,
     run_id: str | None,
     mode: VideoMode,
-    fps: int | None,
+    source_fps: int | None,
+    output_fps: int | None,
+    interpolation: VideoSmoothing | None,
     start_frame_index: int | None,
     end_frame_index: int | None,
     timestamp_overlay: bool,
@@ -237,7 +248,9 @@ async def generate_video(
     video = service.create_generation(
         run_id=run_id,
         mode=mode,
-        fps=fps,
+        source_fps=source_fps,
+        output_fps=output_fps,
+        interpolation=interpolation,
         start_frame_index=start_frame_index,
         end_frame_index=end_frame_index,
         timestamp_overlay=timestamp_overlay,
@@ -250,7 +263,9 @@ async def generate_video(
                 "run_id": video.run_id,
                 "status": video.status.value,
                 "mode": video.mode.value,
-                "fps": video.fps,
+                "source_fps": video.source_fps,
+                "output_fps": video.output_fps,
+                "interpolation": video.interpolation.value,
                 "start_frame_index": video.start_frame_index,
                 "end_frame_index": video.end_frame_index,
                 "timestamp_overlay": video.timestamp_overlay,
@@ -298,7 +313,9 @@ def main(argv: list[str] | None = None) -> int:
                 generate_video(
                     run_id=arguments.run if arguments.command == "generate" else None,
                     mode=arguments.mode,
-                    fps=arguments.fps,
+                    source_fps=arguments.source_fps,
+                    output_fps=arguments.output_fps,
+                    interpolation=arguments.interpolation,
                     start_frame_index=arguments.start_frame,
                     end_frame_index=arguments.end_frame,
                     timestamp_overlay=arguments.timestamp_overlay,

@@ -61,6 +61,7 @@ async def ingest_latest_forecast(
                 client,
                 now=discovered_at,
                 horizon_hours=settings.forecast_hours,
+                lookback_hours=settings.forecast_lookback_hours,
                 interval_minutes=settings.frame_interval_minutes,
                 max_fallback_steps=settings.max_start_fallback_steps,
             )
@@ -86,6 +87,7 @@ async def ingest_latest_forecast(
             data_dir=settings.data_dir,
             interval_minutes=settings.frame_interval_minutes,
             forecast_hours=settings.forecast_hours,
+            lookback_hours=settings.forecast_lookback_hours,
             max_start_fallback_steps=settings.max_start_fallback_steps,
             allow_missing_frames=settings.allow_missing_frames,
             minimum_frame_coverage=settings.min_frame_coverage,

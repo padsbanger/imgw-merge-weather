@@ -11,11 +11,14 @@ from app.models import (
     ForecastRunStatus,
     VideoGeneration,
     VideoGenerationStatus,
+    VideoInterpolation,
     VideoMode,
+    VideoSmoothing,
 )
 from app.services.video_generation import (
     VideoGenerationConflictError,
     VideoGenerationCoordinator,
+    ensure_forecast_video,
 )
 
 NOW = datetime(2026, 8, 29, 10, 0, tzinfo=UTC)
@@ -24,7 +27,12 @@ NOW = datetime(2026, 8, 29, 10, 0, tzinfo=UTC)
 class StubVideoService:
     def __init__(self, repository: VideoRepository) -> None:
         self.repository = repository
-        self.settings = SimpleNamespace(video_fps=5)
+        self.settings = SimpleNamespace(
+            video_source_fps=3,
+            video_output_fps=30,
+            video_interpolation="crossfade",
+            video_max_concurrent_renders=1,
+        )
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
@@ -33,7 +41,9 @@ class StubVideoService:
         *,
         run_id: str,
         mode: VideoMode,
-        fps: int,
+        source_fps: int,
+        output_fps: int,
+        interpolation: VideoSmoothing,
         start_frame_index: int | None,
         end_frame_index: int | None,
         timestamp_overlay: bool,
@@ -44,7 +54,9 @@ class StubVideoService:
             created_at=NOW,
             updated_at=NOW,
             mode=mode,
-            fps=fps,
+            source_fps=source_fps,
+            output_fps=output_fps,
+            interpolation=VideoInterpolation(interpolation.value),
             crf=20,
             preset="medium",
             output_filename="video_coord001.mp4",
@@ -97,13 +109,13 @@ async def test_video_coordinator_runs_in_background_and_rejects_duplicate(
     coordinator = VideoGenerationCoordinator(service=service, repository=repository)
 
     pending = await coordinator.start(
-        run_id="merge_coord", mode=VideoMode.SOURCE, fps=5
+        run_id="merge_coord", mode=VideoMode.SOURCE
     )
     await service.started.wait()
 
     assert pending.status == VideoGenerationStatus.PENDING
     with pytest.raises(VideoGenerationConflictError, match="already pending"):
-        await coordinator.start(run_id="merge_coord", mode=VideoMode.SOURCE, fps=5)
+        await coordinator.start(run_id="merge_coord", mode=VideoMode.SOURCE)
 
     service.release.set()
     for _ in range(10):
@@ -122,7 +134,56 @@ async def test_video_coordinator_cancels_active_generation_on_shutdown(
     repository = repositories(tmp_path)
     service = StubVideoService(repository)
     coordinator = VideoGenerationCoordinator(service=service, repository=repository)
-    await coordinator.start(run_id="merge_coord", mode=VideoMode.SOURCE, fps=5)
+    await coordinator.start(run_id="merge_coord", mode=VideoMode.SOURCE)
     await service.started.wait()
 
     await coordinator.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_automatic_video_enqueues_only_when_completed_run_has_no_video(
+    tmp_path: Path,
+) -> None:
+    repository = repositories(tmp_path)
+    service = StubVideoService(repository)
+    coordinator = VideoGenerationCoordinator(service=service, repository=repository)
+    run = ForecastRepository(repository.database).get_run("merge_coord")
+    assert run is not None
+
+    pending = await ensure_forecast_video(
+        run,
+        enabled=True,
+        repository=repository,
+        coordinator=coordinator,
+    )
+    assert pending is not None
+    assert pending.status == VideoGenerationStatus.PENDING
+
+    same_video = await ensure_forecast_video(
+        run,
+        enabled=True,
+        repository=repository,
+        coordinator=coordinator,
+    )
+    assert same_video is not None
+    assert same_video.video_id == pending.video_id
+
+    await service.started.wait()
+    service.release.set()
+    await coordinator.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_automatic_video_is_disabled_by_default(tmp_path: Path) -> None:
+    repository = repositories(tmp_path)
+    service = StubVideoService(repository)
+    coordinator = VideoGenerationCoordinator(service=service, repository=repository)
+    run = ForecastRepository(repository.database).get_run("merge_coord")
+
+    assert await ensure_forecast_video(
+        run,
+        enabled=False,
+        repository=repository,
+        coordinator=coordinator,
+    ) is None
+    assert repository.list(run_id="merge_coord") == []

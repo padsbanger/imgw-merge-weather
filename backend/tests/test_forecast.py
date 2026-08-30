@@ -108,6 +108,17 @@ def test_builds_inclusive_eight_hour_sequence_of_49_frames() -> None:
     assert all(timestamp.tzinfo is UTC for timestamp in frames)
 
 
+def test_builds_two_hour_lookback_plus_eight_hour_forecast_of_61_frames() -> None:
+    current_cycle = datetime(2026, 8, 29, 10, 20, tzinfo=UTC)
+
+    frames = build_frame_times(current_cycle, lookback_hours=2)
+
+    assert len(frames) == 61
+    assert frames[0] == datetime(2026, 8, 29, 8, 20, tzinfo=UTC)
+    assert frames[12] == current_cycle
+    assert frames[-1] == datetime(2026, 8, 29, 18, 20, tzinfo=UTC)
+
+
 def test_sequence_converts_local_start_to_canonical_utc() -> None:
     warsaw_offset = timezone(timedelta(hours=2))
     local_start = datetime(2026, 8, 29, 12, 20, tzinfo=warsaw_offset)
@@ -139,6 +150,14 @@ def test_sequence_rejects_invalid_configuration(
             datetime(2026, 8, 29, 10, 20, tzinfo=UTC),
             horizon_hours=horizon_hours,
             interval_minutes=interval_minutes,
+        )
+
+
+def test_sequence_rejects_negative_lookback() -> None:
+    with pytest.raises(ForecastTimeError, match="lookback"):
+        build_frame_times(
+            datetime(2026, 8, 29, 10, 20, tzinfo=UTC),
+            lookback_hours=-1,
         )
 
 
@@ -218,3 +237,25 @@ async def test_complete_sequence_probe_falls_back_when_latest_endpoint_is_missin
     assert probe.fallback_steps == 1
     assert probe.attempted_start_times == (expected_start, resolved_start)
     assert set(probe.prefetched_frames) == {expected_start, resolved_start, resolved_end}
+
+
+@pytest.mark.asyncio
+async def test_complete_sequence_probe_includes_lookback_boundary() -> None:
+    current_cycle = datetime(2026, 8, 29, 10, 20, tzinfo=UTC)
+    lookback_start = datetime(2026, 8, 29, 8, 20, tzinfo=UTC)
+    forecast_end = datetime(2026, 8, 29, 18, 20, tzinfo=UTC)
+    fetcher = StubFrameFetcher(set())
+
+    probe = await probe_latest_complete_sequence(
+        fetcher,
+        now=datetime(2026, 8, 29, 10, 27, tzinfo=UTC),
+        horizon_hours=8,
+        lookback_hours=2,
+    )
+
+    assert probe.resolved_start_time == current_cycle
+    assert set(probe.prefetched_frames) == {
+        lookback_start,
+        current_cycle,
+        forecast_end,
+    }

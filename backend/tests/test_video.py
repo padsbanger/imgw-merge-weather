@@ -17,6 +17,7 @@ from app.models import (
     FrameValidationStatus,
     VideoGenerationStatus,
     VideoMode,
+    VideoSmoothing,
 )
 from app.video import (
     CommandResult,
@@ -44,6 +45,7 @@ class FakeCommands:
         self.staged_targets: list[Path] = []
         self.staged_symlinks: list[bool] = []
         self.overlay_sample: tuple[int, int, int] | None = None
+        self.duration = 0.0
 
     async def __call__(self, arguments: Any, _timeout: float) -> CommandResult:
         command = list(arguments)
@@ -53,6 +55,7 @@ class FakeCommands:
             staged = sorted(input_pattern.parent.glob("frame_*.jpg"))
             self.staged_symlinks = [path.is_symlink() for path in staged]
             self.staged_targets = [path.resolve() for path in staged]
+            self.duration = len(staged) / float(command[command.index("-framerate") + 1])
             if staged and not staged[0].is_symlink():
                 with Image.open(staged[0]) as image:
                     self.overlay_sample = image.convert("RGB").getpixel(
@@ -68,10 +71,11 @@ class FakeCommands:
                     "pix_fmt": self.pixel_format,
                     "width": self.width,
                     "height": self.height,
-                    "duration": "0.600000",
+                    "avg_frame_rate": "30/1",
+                    "duration": str(self.duration),
                 }
             ],
-            "format": {"duration": "0.600000"},
+            "format": {"duration": str(self.duration)},
         }
         return CommandResult(0, json.dumps(payload), "")
 
@@ -179,7 +183,7 @@ async def test_generates_and_validates_browser_compatible_mp4(
 
     assert result.status == VideoGenerationStatus.COMPLETED
     assert (result.width, result.height) == probe_size
-    assert result.duration_seconds == 0.6
+    assert result.duration_seconds == 1.0
     assert result.size_bytes == 2_100
     assert repository.get(result.video_id) == result
     output_path = settings.output_dir / result.output_filename
@@ -191,6 +195,49 @@ async def test_generates_and_validates_browser_compatible_mp4(
     assert ffmpeg[ffmpeg.index("-pix_fmt") + 1] == "yuv420p"
     assert filter_fragment in ffmpeg[ffmpeg.index("-vf") + 1]
     assert "in_range=pc:out_range=tv" in ffmpeg[ffmpeg.index("-vf") + 1]
+    assert ffmpeg[ffmpeg.index("-framerate") + 1] == "3"
+    assert ffmpeg[ffmpeg.index("-r") + 1] == "30"
+    assert "framerate=fps=30" in ffmpeg[ffmpeg.index("-vf") + 1]
+
+
+@pytest.mark.parametrize(
+    ("interpolation", "expected_filter", "unexpected_filter"),
+    [
+        (VideoSmoothing.NONE, None, "framerate="),
+        (VideoSmoothing.CROSSFADE, "framerate=fps=30", "minterpolate="),
+    ],
+)
+def test_interpolation_ffmpeg_pipelines(
+    tmp_path: Path,
+    interpolation: VideoSmoothing,
+    expected_filter: str | None,
+    unexpected_filter: str,
+) -> None:
+    settings = Settings(data_dir=tmp_path)
+    run = make_run(settings)
+    service, _ = make_service(
+        tmp_path, run, FakeCommands(width=1700, height=1600)
+    )
+    video = service.create_generation(
+        run_id=run.run_id,
+        mode=VideoMode.SOURCE,
+        source_fps=2,
+        output_fps=30,
+        interpolation=interpolation,
+    )
+
+    command = service._ffmpeg_arguments(
+        video,
+        tmp_path / "staging",
+        tmp_path / "output.mp4",
+    )
+    video_filter = command[command.index("-vf") + 1]
+
+    assert command[command.index("-framerate") + 1] == "2"
+    assert command[command.index("-r") + 1] == "30"
+    if expected_filter is not None:
+        assert expected_filter in video_filter
+    assert unexpected_filter not in video_filter
 
 
 @pytest.mark.asyncio

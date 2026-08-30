@@ -127,7 +127,7 @@ export function RunSidebar({
           </div>
           <div>
             <dt>RANGE</dt>
-            <dd>{run.forecast_hours} h</dd>
+            <dd>{formatRunWindowHours(run)} h</dd>
           </div>
           <div>
             <dt>STEP</dt>
@@ -216,5 +216,16 @@ export function RunSidebar({
         </nav>
       </section>
     </aside>
+  )
+}
+
+function formatRunWindowHours(run: ForecastRunDetail): number {
+  const first = run.frames[0]
+  const last = run.frames.at(-1)
+  if (!first || !last) return run.forecast_hours
+  return (
+    (new Date(last.forecast_time).getTime() -
+      new Date(first.forecast_time).getTime()) /
+    3_600_000
   )
 }

@@ -15,7 +15,6 @@ function frame(
   return {
     frame_index: frameIndex,
     forecast_time: forecastTime,
-    frame_url: `/frames/${frameIndex}`,
     source_url: `https://cmm.imgw.pl/${frameIndex}.jpg`,
     width: validationStatus === 'valid' ? 1700 : null,
     height: validationStatus === 'valid' ? 1600 : null,
@@ -27,12 +26,13 @@ function frame(
 }
 
 describe('forecast run selection', () => {
-  it('parses only bounded non-negative minute offsets', () => {
+  it('parses bounded signed minute offsets', () => {
     expect(parseForecastOffset('120')).toBe(120)
     expect(parseForecastOffset('0')).toBe(0)
-    expect(parseForecastOffset('-10')).toBeNull()
+    expect(parseForecastOffset('-120')).toBe(-120)
     expect(parseForecastOffset('10.5')).toBeNull()
     expect(parseForecastOffset('1441')).toBeNull()
+    expect(parseForecastOffset('-1441')).toBeNull()
     expect(parseForecastOffset(null)).toBeNull()
   })
 
@@ -51,6 +51,18 @@ describe('forecast run selection', () => {
   it('calculates an offset from the selected frame', () => {
     const selected = frame(2, '2026-08-29T09:20:00Z')
     expect(frameOffsetMinutes(selected, '2026-08-29T09:00:00Z')).toBe(20)
+    expect(frameOffsetMinutes(selected, '2026-08-29T10:00:00Z')).toBe(-40)
     expect(frameOffsetMinutes(undefined, '2026-08-29T09:00:00Z')).toBeNull()
+  })
+
+  it('defaults to the current cycle when frames include lookback history', () => {
+    const frames = [
+      frame(0, '2026-08-29T08:00:00Z'),
+      frame(1, '2026-08-29T09:00:00Z'),
+      frame(2, '2026-08-29T10:00:00Z'),
+    ]
+
+    expect(selectFrameForOffset(frames, '2026-08-29T10:00:00Z', null)).toBe(2)
+    expect(selectFrameForOffset(frames, '2026-08-29T10:00:00Z', -120)).toBe(0)
   })
 })

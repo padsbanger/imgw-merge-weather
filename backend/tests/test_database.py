@@ -13,6 +13,7 @@ from app.models import (
     FrameValidationStatus,
     VideoGeneration,
     VideoGenerationStatus,
+    VideoInterpolation,
     VideoMode,
 )
 from app.persistence import initialize_forecast_persistence, write_forecast_manifest
@@ -76,7 +77,9 @@ def make_video(
         updated_at=START,
         status=status,
         mode=VideoMode.SOURCE,
-        fps=5,
+        source_fps=3,
+        output_fps=30,
+        interpolation=VideoInterpolation.CROSSFADE,
         codec="libx264",
         crf=20,
         preset="medium",
@@ -133,7 +136,7 @@ def test_database_migrates_existing_version_one_database_forward(tmp_path: Path)
     assert database.schema_version() == 1
     database.initialize()
 
-    assert database.schema_version() == 3
+    assert database.schema_version() == SCHEMA_VERSION
     with sqlite3.connect(database.path) as connection:
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'video_generations'"
@@ -142,7 +145,14 @@ def test_database_migrates_existing_version_one_database_forward(tmp_path: Path)
             row[1]
             for row in connection.execute("PRAGMA table_info(video_generations)").fetchall()
         }
-    assert {"start_frame_index", "end_frame_index", "timestamp_overlay"} <= columns
+    assert {
+        "start_frame_index",
+        "end_frame_index",
+        "timestamp_overlay",
+        "source_fps",
+        "output_fps",
+        "interpolation",
+    } <= columns
 
 
 def test_repository_round_trips_runs_frames_and_application_state(tmp_path: Path) -> None:
@@ -192,7 +202,11 @@ def test_video_repository_round_trips_lists_and_recovers_active_generations(
         completed.video_id,
     ]
     assert repository.get_active(
-        run_id="merge_older", mode=VideoMode.SOURCE, fps=5
+        run_id="merge_older",
+        mode=VideoMode.SOURCE,
+        source_fps=3,
+        output_fps=30,
+        interpolation=VideoInterpolation.CROSSFADE,
     ) == rendering
 
     recovered = repository.recover_interrupted(recovered_at=START + timedelta(minutes=1))

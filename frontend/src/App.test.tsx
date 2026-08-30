@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -19,11 +19,10 @@ const frameTimes = [
   '2026-08-29T10:20:00Z',
 ]
 
-function makeFrames(runId: string): ForecastFrame[] {
+function makeFrames(): ForecastFrame[] {
   return frameTimes.map((forecastTime, frameIndex) => ({
     frame_index: frameIndex,
     forecast_time: forecastTime,
-    frame_url: `/api/runs/${runId}/frames/${frameIndex}`,
     source_url: `https://cmm.imgw.pl/frame-${frameIndex}.jpg`,
     width: 1700,
     height: 1600,
@@ -59,7 +58,7 @@ function makeRun(runId = 'merge_latest'): ForecastRunDetail {
       age_seconds: 120,
     },
     detail_url: `/api/runs/${runId}`,
-    frames: makeFrames(runId),
+    frames: makeFrames(),
   }
 }
 
@@ -77,10 +76,9 @@ function makeRunWithTimes(runId: string, times: string[]): ForecastRunDetail {
     resolved_start_time: times[0],
     forecast_end_time: times.at(-1) ?? times[0],
     frames: times.map((forecastTime, frameIndex) => ({
-      ...makeFrames(runId)[0],
+      ...makeFrames()[0],
       frame_index: frameIndex,
       forecast_time: forecastTime,
-      frame_url: `/api/runs/${runId}/frames/${frameIndex}`,
       source_url: `https://cmm.imgw.pl/${runId}-${frameIndex}.jpg`,
       sha256: String(frameIndex).repeat(64),
     })),
@@ -113,16 +111,19 @@ function makeServiceStatus(): ServiceStatusResponse {
 function makeVideo(
   videoId = 'video_complete1',
   status: VideoGeneration['status'] = 'completed',
+  runId = 'merge_latest',
 ): VideoGeneration {
   const completed = status === 'completed'
   return {
     video_id: videoId,
-    run_id: 'merge_latest',
+    run_id: runId,
     created_at: '2026-08-29T10:03:00Z',
     updated_at: '2026-08-29T10:03:01Z',
     status,
     mode: 'source',
-    fps: 5,
+    source_fps: 3,
+    output_fps: 30,
+    interpolation: 'crossfade',
     codec: 'libx264',
     crf: 20,
     preset: 'medium',
@@ -154,8 +155,13 @@ function mockVideoApi() {
       if (path === '/api/runs/latest' || path === `/api/runs/${run.run_id}`) {
         return jsonResponse(run)
       }
-      if (path === '/api/runs?limit=20') return jsonResponse(listing)
+      if (path === '/api/runs?limit=20' || path === '/api/runs?limit=200') {
+        return jsonResponse(listing)
+      }
       if (path === '/api/status') return jsonResponse(makeServiceStatus())
+      if (path === '/api/videos?limit=200') {
+        return jsonResponse({ videos, count: videos.length })
+      }
       if (path === '/api/videos?limit=50&run_id=merge_latest') {
         return jsonResponse({ videos, count: videos.length })
       }
@@ -165,7 +171,9 @@ function mockVideoApi() {
         const pending = {
           ...makeVideo('video_pending1', 'pending'),
           mode: request.mode,
-          fps: request.fps,
+          source_fps: request.source_fps,
+          output_fps: request.output_fps,
+          interpolation: request.interpolation,
           start_frame_index: request.start_frame_index,
           end_frame_index: request.end_frame_index,
           timestamp_overlay: request.timestamp_overlay,
@@ -199,11 +207,19 @@ function mockForecastApi(
       if (path === '/api/runs/latest' || path === `/api/runs/${run.run_id}`) {
         return jsonResponse(run)
       }
-      if (path === '/api/runs?limit=20') return jsonResponse(listing)
+      if (path === '/api/runs?limit=20' || path === '/api/runs?limit=200') {
+        return jsonResponse(listing)
+      }
       if (path === '/api/status') {
         return statusAvailable
           ? jsonResponse(serviceStatus)
           : jsonResponse({ detail: 'Offline' }, false, 503)
+      }
+      if (path === '/api/videos?limit=200') {
+        return jsonResponse({ videos: [], count: 0 })
+      }
+      if (path === `/api/videos?limit=50&run_id=${run.run_id}`) {
+        return jsonResponse({ videos: [], count: 0 })
       }
       return jsonResponse({ detail: 'Not found' }, false, 404)
     }),
@@ -227,8 +243,38 @@ function mockRunHistory(runs: ForecastRunDetail[], latestRunId: string) {
     vi.fn((input: string | URL | Request) => {
       const path = String(input)
       if (path === '/api/runs/latest') return jsonResponse(latest)
-      if (path === '/api/runs?limit=20') return jsonResponse(listing)
+      if (path === '/api/runs?limit=20' || path === '/api/runs?limit=200') {
+        return jsonResponse(listing)
+      }
       if (path === '/api/status') return jsonResponse(makeServiceStatus())
+      if (path === '/api/videos?limit=200') {
+        const videoRun = runs.find((run) => run.status === 'completed')
+        const videos =
+          videoRun === undefined
+            ? []
+            : [
+                makeVideo(
+                  `video_history${runs.indexOf(videoRun)}`,
+                  'completed',
+                  videoRun.run_id,
+                ),
+              ]
+        return jsonResponse({ videos, count: videos.length })
+      }
+      if (path.startsWith('/api/videos?limit=50&run_id=')) {
+        const selectedRun = runs.find(
+          (run) => path === `/api/videos?limit=50&run_id=${run.run_id}`,
+        )
+        if (selectedRun?.status === 'completed') {
+          const video = makeVideo(
+            `video_history${runs.indexOf(selectedRun)}`,
+            'completed',
+            selectedRun.run_id,
+          )
+          return jsonResponse({ videos: [video], count: 1 })
+        }
+        return jsonResponse({ videos: [], count: 0 })
+      }
       const run = runs.find((item) => path === `/api/runs/${item.run_id}`)
       return run === undefined
         ? jsonResponse({ detail: 'Not found' }, false, 404)
@@ -253,73 +299,142 @@ function renderApp(route = '/') {
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
 describe('weather viewer', () => {
-  it('loads the latest run with weather image, freshness, timeline, and metadata', async () => {
+  it('loads the latest run with an explicit video state, freshness, timeline, and metadata', async () => {
     mockForecastApi()
     renderApp()
 
-    const image = await screen.findByRole('img', {
-      name: 'IMGW MERGE precipitation forecast for 12:00',
-    })
-    expect(image).toHaveAttribute('src', '/api/runs/merge_latest/frames/0')
+    expect(await screen.findByText('No generated forecast video')).toBeInTheDocument()
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
     expect(screen.getByText('LIVE')).toBeInTheDocument()
     expect(screen.getByText('LIVE · 2 min ago')).toBeInTheDocument()
     expect(screen.getByText('LATEST')).toBeInTheDocument()
     expect(screen.getByText('3 / 3')).toBeInTheDocument()
-    expect(screen.getAllByText('10:00 UTC')).toHaveLength(2)
-    expect(screen.getByText('+00:00')).toBeInTheDocument()
+    expect(screen.getByText('10:00 UTC')).toBeInTheDocument()
     expect(screen.getByText('SOURCE UPDATE')).toBeInTheDocument()
     expect(screen.getByText('ONLINE')).toBeInTheDocument()
     expect(screen.getByText('DISABLED')).toBeInTheDocument()
     expect(screen.getByText('WARSAW')).toBeInTheDocument()
-    expect(screen.getByRole('slider', { name: 'Select forecast frame' })).toHaveValue('0')
+    expect(screen.getByRole('slider', { name: 'Select forecast time' })).toBeDisabled()
   })
 
-  it('supports tick clicks, range scrubbing, buttons, and keyboard arrows', async () => {
-    mockForecastApi()
+  it('embeds the newest completed video without requesting individual images', async () => {
+    mockVideoApi()
     renderApp()
-    await screen.findByRole('img', { name: /12:00/ })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Forecast 12:10' }))
-    expect(screen.getByRole('img', { name: /12:10/ })).toHaveAttribute(
-      'src',
-      '/api/runs/merge_latest/frames/1',
+    const video = await screen.findByLabelText('Generated forecast video') as HTMLVideoElement
+    expect(video).toHaveAttribute('src', '/api/videos/video_complete1/file')
+    expect(video).toHaveAttribute('autoplay')
+    expect(video).toHaveAttribute('loop')
+    expect(video.parentElement).toHaveClass('forecast-media-stage')
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    expect(fetch).not.toHaveBeenCalledWith(
+      '/api/runs/merge_latest/frames/0',
+      expect.anything(),
+    )
+  })
+
+  it('opens the run owning the latest available video when the newest run has none', async () => {
+    const latestRun = makeRun('merge_without_video')
+    const videoRun = makeRunWithTimes('merge_with_latest_video', [
+      '2026-08-29T09:00:00Z',
+      '2026-08-29T09:10:00Z',
+      '2026-08-29T09:20:00Z',
+    ])
+    const olderVideoRun = makeRunWithTimes('merge_with_newer_artifact', [
+      '2026-08-29T08:00:00Z',
+      '2026-08-29T08:10:00Z',
+      '2026-08-29T08:20:00Z',
+    ])
+    const video = makeVideo('video_available1', 'completed', videoRun.run_id)
+    const newerArtifact = makeVideo(
+      'video_newerartifact1',
+      'completed',
+      olderVideoRun.run_id,
+    )
+    const listing: ForecastRunListResponse = {
+      runs: [latestRun, videoRun, olderVideoRun].map(({ frames: _frames, ...summary }) => {
+        void _frames
+        return summary
+      }),
+      count: 3,
+      latest_run_id: latestRun.run_id,
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/videos?limit=200') {
+          return jsonResponse({ videos: [newerArtifact, video], count: 2 })
+        }
+        if (path === `/api/runs/${videoRun.run_id}`) return jsonResponse(videoRun)
+        if (path === '/api/runs/latest') return jsonResponse(latestRun)
+        if (path === '/api/runs?limit=20' || path === '/api/runs?limit=200') {
+          return jsonResponse(listing)
+        }
+        if (path === '/api/status') return jsonResponse(makeServiceStatus())
+        if (path === `/api/videos?limit=50&run_id=${videoRun.run_id}`) {
+          return jsonResponse({ videos: [video], count: 1 })
+        }
+        return jsonResponse({ detail: 'Not found' }, false, 404)
+      }),
     )
 
-    fireEvent.change(screen.getByRole('slider', { name: 'Select forecast frame' }), {
-      target: { value: '2' },
-    })
-    expect(screen.getByRole('img', { name: /12:20/ })).toBeInTheDocument()
+    renderApp()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Previous forecast frame' }))
-    expect(screen.getByRole('img', { name: /12:10/ })).toBeInTheDocument()
-
-    fireEvent.keyDown(screen.getByLabelText('MERGE precipitation forecast viewer'), {
-      key: 'ArrowRight',
+    expect(await screen.findByLabelText('Generated forecast video')).toHaveAttribute(
+      'src',
+      video.file_url,
+    )
+    expect(screen.getByText('HISTORICAL')).toBeInTheDocument()
+    expect(fetch).toHaveBeenCalledWith(`/api/runs/${videoRun.run_id}`, {
+      headers: { Accept: 'application/json' },
     })
-    expect(screen.getByRole('img', { name: /12:20/ })).toBeInTheDocument()
   })
 
-  it('plays valid frames, pauses, and loops at the end', async () => {
-    mockForecastApi()
+  it('seeks the video from tick clicks, range scrubbing, buttons, and keyboard arrows', async () => {
+    mockVideoApi()
     renderApp()
-    await screen.findByRole('img', { name: /12:00/ })
-    vi.useFakeTimers()
+    const video = await screen.findByLabelText('Generated forecast video') as HTMLVideoElement
 
-    fireEvent.click(screen.getByRole('button', { name: 'Play forecast animation' }))
-    act(() => vi.advanceTimersByTime(500))
-    expect(screen.getByRole('img', { name: /12:10/ })).toBeInTheDocument()
-    act(() => vi.advanceTimersByTime(500))
-    expect(screen.getByRole('img', { name: /12:20/ })).toBeInTheDocument()
-    act(() => vi.advanceTimersByTime(500))
-    expect(screen.getByRole('img', { name: /12:00/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Forecast 12:10' }))
+    expect(video.currentTime).toBeCloseTo(1 / 3)
+    expect(screen.getByRole('slider', { name: 'Select forecast time' })).toHaveValue('1')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Pause forecast animation' }))
-    act(() => vi.advanceTimersByTime(1_000))
-    expect(screen.getByRole('img', { name: /12:00/ })).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('slider', { name: 'Select forecast time' }), {
+      target: { value: '2' },
+    })
+    expect(video.currentTime).toBeCloseTo(2 / 3)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous forecast time' }))
+    expect(video.currentTime).toBeCloseTo(1 / 3)
+
+    fireEvent.keyDown(screen.getByLabelText('MERGE precipitation forecast video viewer'), {
+      key: 'ArrowRight',
+    })
+    expect(video.currentTime).toBeCloseTo(2 / 3)
+  })
+
+  it('uses the forecast controls to play, pause, and follow video time', async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined)
+    mockVideoApi()
+    renderApp()
+    const video = await screen.findByLabelText('Generated forecast video') as HTMLVideoElement
+
+    fireEvent.click(screen.getByRole('button', { name: 'Play forecast video' }))
+    expect(play).toHaveBeenCalledOnce()
+    fireEvent.play(video)
+    fireEvent.click(screen.getByRole('button', { name: 'Pause forecast video' }))
+    expect(pause).toHaveBeenCalledOnce()
+
+    video.currentTime = 0.34
+    fireEvent.timeUpdate(video)
+    expect(screen.getByRole('slider', { name: 'Select forecast time' })).toHaveValue('1')
   })
 
   it('loads a specific historical run route', async () => {
@@ -327,8 +442,7 @@ describe('weather viewer', () => {
     mockForecastApi(historical)
     renderApp('/runs/merge_historical')
 
-    const image = await screen.findByRole('img', { name: /12:00/ })
-    expect(image).toHaveAttribute('src', '/api/runs/merge_historical/frames/0')
+    expect(await screen.findByText('No generated forecast video')).toBeInTheDocument()
     expect(fetch).toHaveBeenCalledWith('/api/runs/merge_historical', {
       headers: { Accept: 'application/json' },
     })
@@ -348,7 +462,7 @@ describe('weather viewer', () => {
     mockRunHistory([latest, historical], latest.run_id)
     renderApp()
 
-    await screen.findByRole('img', { name: /12:00/ })
+    await screen.findByLabelText('Generated forecast video')
     fireEvent.click(screen.getByRole('button', { name: 'Forecast 12:20' }))
     fireEvent.click(
       screen.getByRole('link', {
@@ -356,11 +470,11 @@ describe('weather viewer', () => {
       }),
     )
 
-    const historicalImage = await screen.findByRole('img', { name: /11:20/ })
-    expect(historicalImage).toHaveAttribute(
+    expect(await screen.findByLabelText('Generated forecast video')).toHaveAttribute(
       'src',
-      '/api/runs/merge_historical/frames/2',
+      '/api/videos/video_history1/file',
     )
+    expect(screen.getByRole('slider', { name: 'Select forecast time' })).toHaveValue('2')
     expect(screen.getByText('HISTORICAL')).toBeInTheDocument()
     expect(screen.queryByText('LATEST')).not.toBeInTheDocument()
   })
@@ -400,7 +514,7 @@ describe('weather viewer', () => {
     mockRunHistory([latest, partial, failed], latest.run_id)
     renderApp()
 
-    await screen.findByRole('img', { name: /12:00/ })
+    await screen.findByLabelText('Generated forecast video')
     expect(screen.getByText('1 missing')).toBeInTheDocument()
     fireEvent.click(
       screen.getByRole('link', {
@@ -409,6 +523,7 @@ describe('weather viewer', () => {
     )
 
     expect(await screen.findByText('INGESTION FAILED')).toBeInTheDocument()
+    expect(await screen.findByText('No generated forecast video')).toBeInTheDocument()
     expect(screen.getByText('Required forecast frames are unavailable')).toBeInTheDocument()
     expect(screen.getByText(/Missing 2:/)).toBeInTheDocument()
     expect(screen.getByText('HISTORICAL')).toBeInTheDocument()
@@ -418,7 +533,7 @@ describe('weather viewer', () => {
     mockForecastApi(makeRun(), false)
     renderApp()
 
-    await screen.findByRole('img', { name: /12:00/ })
+    await screen.findByText('No generated forecast video')
     expect(await screen.findAllByText('OFFLINE')).toHaveLength(2)
     expect(screen.getByText(/OFFLINE · 2 min ago/)).toBeInTheDocument()
     expect(screen.getByText('cached data shown')).toBeInTheDocument()
@@ -432,7 +547,7 @@ describe('weather viewer', () => {
     mockForecastApi(makeRun(), true, status)
     renderApp()
 
-    await screen.findByRole('img', { name: /12:00/ })
+    await screen.findByText('No generated forecast video')
     expect(screen.getByText('ACTIVE')).toBeInTheDocument()
     expect(screen.getByText('LAST IMGW ERROR')).toBeInTheDocument()
     expect(screen.getByText('IMGW returned HTTP 503')).toBeInTheDocument()
@@ -448,7 +563,7 @@ describe('weather viewer', () => {
     mockForecastApi(makeRun(), true, status)
     renderApp()
 
-    await screen.findByRole('img', { name: /12:00/ })
+    await screen.findByText('No generated forecast video')
     expect(screen.getByText('RUNNING')).toBeInTheDocument()
     expect(screen.getByText('next 12:12')).toBeInTheDocument()
   })
@@ -457,7 +572,7 @@ describe('weather viewer', () => {
     const api = mockVideoApi()
     renderApp()
 
-    await screen.findByRole('img', { name: /12:00/ })
+    await screen.findByLabelText('Generated forecast video')
     fireEvent.click(screen.getByRole('button', { name: 'Generate video' }))
 
     expect(screen.getByRole('dialog', { name: 'Forecast videos' })).toBeInTheDocument()
@@ -477,7 +592,16 @@ describe('weather viewer', () => {
     fireEvent.change(screen.getByLabelText('Video range end'), {
       target: { value: '2' },
     })
-    fireEvent.change(screen.getByLabelText('Video FPS'), { target: { value: '7' } })
+    expect(screen.getByRole('radio', { name: /Normal/ })).toBeChecked()
+    expect(screen.getByRole('radio', { name: /^Crossfade/ })).toBeChecked()
+    expect(
+      screen.queryByRole('radio', { name: /^Motion compensated/ }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText('~0.7 s')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: /Fast/ }))
+    fireEvent.click(screen.getByRole('radio', { name: /^None/ }))
+    fireEvent.click(screen.getByText('Advanced settings'))
+    fireEvent.change(screen.getByLabelText('Output FPS'), { target: { value: '45' } })
     fireEvent.click(screen.getByRole('checkbox', { name: 'Timestamp overlay' }))
     fireEvent.click(screen.getByRole('button', { name: 'Generate MP4' }))
 
@@ -485,20 +609,22 @@ describe('weather viewer', () => {
     expect(api.createRequests).toEqual([
       {
         mode: '1:1',
-        fps: 7,
+        source_fps: 5,
+        output_fps: 45,
+        interpolation: 'none',
         start_frame_index: 1,
         end_frame_index: 2,
         timestamp_overlay: true,
       },
     ])
-    expect(screen.getByRole('img', { name: /12:00/ })).toBeInTheDocument()
+    expect(screen.getByLabelText('Generated forecast video')).toBeInTheDocument()
   })
 
   it('requires confirmation before deleting a completed video', async () => {
     const api = mockVideoApi()
     renderApp()
 
-    await screen.findByRole('img', { name: /12:00/ })
+    await screen.findByLabelText('Generated forecast video')
     fireEvent.click(screen.getByRole('button', { name: 'Generate video' }))
     await screen.findByLabelText('source generated forecast video')
 
@@ -511,6 +637,7 @@ describe('weather viewer', () => {
       expect(screen.queryByLabelText('source generated forecast video')).not.toBeInTheDocument()
     })
     expect(api.deletedIds).toEqual(['video_complete1'])
+    expect(await screen.findByText('No generated forecast video')).toBeInTheDocument()
   })
 
   it('shows explicit loading and backend error states', async () => {

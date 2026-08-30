@@ -7,6 +7,10 @@ interface ForecastTimelineProps {
   timeZone: string
   isPlaying: boolean
   canPlay: boolean
+  canStepPrevious: boolean
+  canStepNext: boolean
+  disabled: boolean
+  playbackFps: number | null
   onSelect: (frameIndex: number) => void
   onPrevious: () => void
   onNext: () => void
@@ -20,6 +24,10 @@ export function ForecastTimeline({
   timeZone,
   isPlaying,
   canPlay,
+  canStepPrevious,
+  canStepNext,
+  disabled,
+  playbackFps,
   onSelect,
   onPrevious,
   onNext,
@@ -29,7 +37,7 @@ export function ForecastTimeline({
   if (frames.length === 0) {
     return (
       <section className="timeline timeline--empty" aria-label="Forecast timeline">
-        No frame timestamps are available for this run.
+        No forecast timestamps are available for this video.
       </section>
     )
   }
@@ -42,24 +50,34 @@ export function ForecastTimeline({
   return (
     <section className="timeline" aria-label="Forecast timeline">
       <div className="playback-controls">
-        <button type="button" onClick={onPrevious} aria-label="Previous forecast frame">
+        <button
+          type="button"
+          onClick={onPrevious}
+          disabled={disabled || !canStepPrevious}
+          aria-label="Previous forecast time"
+        >
           ◀
         </button>
         {isPlaying ? (
-          <button type="button" onClick={onPause} aria-label="Pause forecast animation">
+          <button type="button" onClick={onPause} aria-label="Pause forecast video">
             Ⅱ
           </button>
         ) : (
           <button
             type="button"
             onClick={onPlay}
-            disabled={!canPlay}
-            aria-label="Play forecast animation"
+            disabled={disabled || !canPlay}
+            aria-label="Play forecast video"
           >
             ▶
           </button>
         )}
-        <button type="button" onClick={onNext} aria-label="Next forecast frame">
+        <button
+          type="button"
+          onClick={onNext}
+          disabled={disabled || !canStepNext}
+          aria-label="Next forecast time"
+        >
           ▶|
         </button>
       </div>
@@ -72,8 +90,9 @@ export function ForecastTimeline({
             min="0"
             max={Math.max(0, frames.length - 1)}
             value={selectedPosition}
+            disabled={disabled}
             onChange={(event) => onSelect(frames[Number(event.currentTarget.value)].frame_index)}
-            aria-label="Select forecast frame"
+            aria-label="Select forecast time"
             aria-valuetext={
               selectedFrame ? formatLocalTime(selectedFrame.forecast_time, timeZone) : undefined
             }
@@ -91,7 +110,7 @@ export function ForecastTimeline({
                   type="button"
                   key={frame.frame_index}
                   onClick={() => onSelect(frame.frame_index)}
-                  disabled={frame.validation_status !== 'valid'}
+                  disabled={disabled || frame.validation_status !== 'valid'}
                   aria-label={`Forecast ${time}`}
                   aria-current={frame.frame_index === selectedFrameIndex ? 'time' : undefined}
                 >
@@ -104,7 +123,7 @@ export function ForecastTimeline({
       </div>
 
       <div className="playback-rate" aria-label="Playback settings">
-        <span>2 FPS</span>
+        <span>{playbackFps === null ? '— FPS' : `${playbackFps} FPS`}</span>
         <span>LOOP</span>
       </div>
     </section>

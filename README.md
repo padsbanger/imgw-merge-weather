@@ -21,26 +21,31 @@ curl http://localhost:8080/health
 
 Open <http://localhost:8080>. Runtime files are persisted under `./data`.
 
-The root page opens the latest forecast immediately. Use the timeline or its range
-control to select a timestamp, the compact controls to move or play/pause, and the run
-panel to inspect recent forecast snapshots. Frames play in a loop at 2 FPS. Local Warsaw
-time is displayed prominently while UTC remains visible for source traceability.
+The root page opens the completed video belonging to the newest forecast run that has
+one, regardless of when artifacts for older runs were generated. Use the
+timeline or its range control to seek to an encoded forecast timestamp, and use the
+compact previous/next and play/pause controls—or the arrow keys and spacebar—to operate
+the same MP4. The browser does not request individual forecast JPEGs. Runs without a
+completed MP4 show an explicit generation/rendering state. Local Warsaw time is
+displayed prominently while UTC remains visible for source traceability.
 
 Selecting another publication preserves the current forecast offset when possible. If
-that exact timestamp is missing, the nearest valid frame is selected. Latest and
+that exact timestamp is not encoded, the nearest available video timestamp is selected. Latest and
 historical runs are explicitly labeled; partial and failed ingestion attempts remain in
 the run browser with progress, missing-frame counts, source UTC timestamps, and the
-recorded failure reason. The viewer never fills a gap with a different weather frame.
+recorded failure reason. The viewer never invents a timestamp missing from the video.
 
 The header continuously shows Warsaw local time and one of `LIVE`, `FRESH`, `DELAYED`,
 `STALE`, or `OFFLINE`. The run panel shows source update time, data age, backend
 reachability, refresh activity, last refresh outcome, any last IMGW error, and scheduler
-state. Cached imagery remains visible during a backend outage but is explicitly marked
-`OFFLINE`.
+state. Data is delayed from 15 through 60 minutes and stale only after one hour. An
+already loaded forecast remains visible during a status-check failure but is
+explicitly marked `OFFLINE`.
 
 Use the compact `Generate video` action in the current-run panel to open the secondary
-video drawer. Choose a forecast frame range, 1–30 FPS, source or padded 1080×1080 output,
-and optionally add a Warsaw/UTC timestamp overlay. The drawer tracks active rendering,
+video drawer. Choose animation speed, CPU-friendly smoothing (`none` or `crossfade`),
+output FPS, source or padded 1080×1080 output, and optionally add a
+Warsaw/UTC timestamp overlay. The drawer tracks active rendering,
 plays completed MP4s with native browser controls, and provides download, metadata, and
 confirmation-protected deletion while leaving the weather map as the primary workspace.
 
@@ -148,7 +153,8 @@ It still retrieves only one valid frame.
 
 - Internal timestamps are timezone-aware UTC datetimes.
 - UI/display timestamps use `Europe/Warsaw`, including daylight-saving transitions.
-- The default sequence is eight hours inclusive at ten-minute intervals: 49 frames.
+- The default video window starts two hours before the resolved current cycle and ends
+  eight hours after it: ten hours inclusive at ten-minute intervals, or 61 frames.
 - Missing newest start frames may fall back by six intervals by default.
 - Fallback applies only to HTTP 404. Transport, server, and validation failures remain
   visible errors.
@@ -205,6 +211,7 @@ recommended small-delay schedule in `.env`:
 IMGW_SCHEDULER_ENABLED=true
 IMGW_SCHEDULER_CRON=2 * * * *
 IMGW_SCHEDULER_MISFIRE_GRACE_SECONDS=60
+IMGW_VIDEO_AUTO_GENERATE=true
 ```
 
 Restart the container after changing these values. The job runs hourly at two minutes
@@ -212,6 +219,11 @@ past the hour in UTC, avoiding daylight-saving ambiguity while retaining a small
 publication delay.
 `/api/status` reports `running` and an aware `next_run_at`; the run panel displays that
 time in `Europe/Warsaw`.
+
+When `IMGW_VIDEO_AUTO_GENERATE=true`, each completed new run receives one default source
+MP4 using the configured animation and smoothing defaults. Startup also reconciles the
+latest completed run when it has no pending, rendering, or completed video. Existing
+videos are reused, and failed generations may be retried on the next refresh or restart.
 
 Each trigger first performs a conservative latest-sequence boundary probe. If the
 resolved start and validated boundary-frame hashes match the newest completed snapshot,
@@ -234,7 +246,8 @@ Generate a 1080×1080 version from a specific run without stretching the weather
 
 ```bash
 docker compose exec imgw-merge-weather \
-  python -m app.cli generate --run RUN_ID --mode 1:1 --fps 5
+  python -m app.cli generate --run RUN_ID --mode 1:1 \
+  --source-fps 3 --output-fps 30 --interpolation crossfade
 ```
 
 Limit the animation to frames 6–24 and render traceable local/UTC timestamps onto
@@ -242,7 +255,8 @@ staging copies of the frames:
 
 ```bash
 docker compose exec imgw-merge-weather \
-  python -m app.cli generate --run RUN_ID --mode 1:1 --fps 7 \
+  python -m app.cli generate --run RUN_ID --mode 1:1 \
+  --source-fps 5 --output-fps 30 --interpolation crossfade \
   --start-frame 6 --end-frame 24 --timestamp-overlay
 ```
 
@@ -251,21 +265,23 @@ The equivalent REST request is:
 ```bash
 curl -X POST http://localhost:8080/api/runs/RUN_ID/videos \
   -H 'Content-Type: application/json' \
-  -d '{"mode":"source","fps":5,"start_frame_index":0,"end_frame_index":48,"timestamp_overlay":false}'
+  -d '{"mode":"source","source_fps":3,"output_fps":30,"interpolation":"crossfade","start_frame_index":0,"end_frame_index":48,"timestamp_overlay":false}'
 ```
 
 The request returns HTTP 202 immediately. Poll the returned `detail_url` until its state
 is `completed` or `failed`. Completed responses include a `file_url`. Generation uses
-chronological validated frames only, defaults to libx264 at 5 FPS, CRF 20, preset
-`medium`, yuv420p, and fast-start MP4. The `1:1` mode applies proportional scale and
+chronological validated frames only. It defaults to 3 source frames/s (which controls
+duration), 30 output FPS, crossfade smoothing, libx264, CRF 20, preset `medium`, yuv420p,
+and fast-start MP4. The `1:1` mode applies proportional scale and
 padding to 1080×1080. A requested frame range is inclusive. Optional timestamp overlays
 show Warsaw local time and the traceable UTC source time without changing the persisted
-IMGW frames. ffprobe must validate the codec, pixel format, duration, dimensions, and
-file size before the artifact is published.
+IMGW frames. Interpolation is visual smoothing only; it does not create weather samples
+or timestamps. Video rendering runs one job at a time. ffprobe must validate the codec,
+pixel format, duration, dimensions, and file size before the artifact is published.
 
 ## Ingest a forecast run
 
-Collect the newest complete eight-hour sequence:
+Collect the newest complete ten-hour window (`-2h` through `+8h`):
 
 ```bash
 cd backend

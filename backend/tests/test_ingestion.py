@@ -75,6 +75,7 @@ def create_service(
     minimum_frame_coverage: float = 0.90,
     run_id: str = "merge_test_run",
     max_start_fallback_steps: int = 2,
+    lookback_hours: int = 0,
     repository: ForecastRepository | None = None,
 ) -> ForecastIngestionService:
     return ForecastIngestionService(
@@ -82,6 +83,7 @@ def create_service(
         data_dir=tmp_path,
         interval_minutes=30,
         forecast_hours=1,
+        lookback_hours=lookback_hours,
         max_start_fallback_steps=max_start_fallback_steps,
         allow_missing_frames=allow_missing_frames,
         minimum_frame_coverage=minimum_frame_coverage,
@@ -133,6 +135,23 @@ async def test_ingests_complete_latest_run_and_persists_manifest(tmp_path: Path)
     assert manifest["downloaded_frames"] == 3
     assert len(manifest["frames"]) == 3  # type: ignore[arg-type]
     assert list(run_directory.glob(".manifest.*.tmp")) == []
+
+
+@pytest.mark.asyncio
+async def test_ingestion_keeps_cycle_anchor_and_downloads_lookback_window(
+    tmp_path: Path,
+) -> None:
+    service = create_service(tmp_path, FakeImgwClient(), lookback_hours=2)
+
+    run = await service.ingest(start_time=START, now=START)
+
+    assert run.status == ForecastRunStatus.COMPLETED
+    assert run.resolved_start_time == START
+    assert run.forecast_end_time == START + timedelta(hours=1)
+    assert run.expected_frames == 7
+    assert run.frames[0].forecast_time == START - timedelta(hours=2)
+    assert run.frames[4].forecast_time == START
+    assert run.frames[-1].forecast_time == START + timedelta(hours=1)
 
 
 @pytest.mark.asyncio

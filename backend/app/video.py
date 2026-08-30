@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from fractions import Fraction
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -25,7 +26,9 @@ from app.models import (
     FrameValidationStatus,
     VideoGeneration,
     VideoGenerationStatus,
+    VideoInterpolation,
     VideoMode,
+    VideoSmoothing,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -117,7 +120,9 @@ class VideoGenerationService:
         *,
         run_id: str,
         mode: VideoMode,
-        fps: int | None = None,
+        source_fps: int | None = None,
+        output_fps: int | None = None,
+        interpolation: VideoSmoothing | None = None,
         start_frame_index: int | None = None,
         end_frame_index: int | None = None,
         timestamp_overlay: bool = False,
@@ -126,9 +131,19 @@ class VideoGenerationService:
         run = self.forecast_repository.get_run(run_id)
         if run is None:
             raise VideoPrerequisiteError("Forecast run not found")
-        effective_fps = fps if fps is not None else self.settings.video_fps
-        if not 1 <= effective_fps <= 30:
-            raise VideoPrerequisiteError("Video FPS must be between 1 and 30")
+        effective_source_fps = (
+            source_fps if source_fps is not None else self.settings.video_source_fps
+        )
+        effective_output_fps = (
+            output_fps if output_fps is not None else self.settings.video_output_fps
+        )
+        effective_interpolation = interpolation or VideoSmoothing(
+            self.settings.video_interpolation
+        )
+        if not 1 <= effective_source_fps <= 10:
+            raise VideoPrerequisiteError("Source FPS must be between 1 and 10")
+        if not 15 <= effective_output_fps <= 60:
+            raise VideoPrerequisiteError("Output FPS must be between 15 and 60")
         selected_frames = self._validated_frames(
             run,
             start_frame_index=start_frame_index,
@@ -152,7 +167,9 @@ class VideoGenerationService:
             created_at=timestamp,
             updated_at=timestamp,
             mode=mode,
-            fps=effective_fps,
+            source_fps=effective_source_fps,
+            output_fps=effective_output_fps,
+            interpolation=VideoInterpolation(effective_interpolation.value),
             codec=self.settings.video_codec,
             crf=self.settings.video_crf,
             preset=self.settings.video_preset,
@@ -171,11 +188,14 @@ class VideoGenerationService:
         )
         self.video_repository.upsert(video)
         LOGGER.info(
-            "video=%s run=%s event=video_pending mode=%s fps=%d",
+            "video=%s run=%s event=video_pending mode=%s source_fps=%d "
+            "output_fps=%d interpolation=%s",
             video.video_id,
             video.run_id,
             video.mode.value,
-            video.fps,
+            video.source_fps,
+            video.output_fps,
+            video.interpolation.value,
         )
         return video
 
@@ -408,17 +428,24 @@ class VideoGenerationService:
     ) -> list[str]:
         if video.mode == VideoMode.SQUARE:
             size = self.settings.square_video_size
-            video_filter = (
+            framing_filter = (
                 f"scale={size}:{size}:force_original_aspect_ratio=decrease:"
                 "in_range=pc:out_range=tv,"
-                f"pad={size}:{size}:(ow-iw)/2:(oh-ih)/2:color=black,"
-                "format=yuv420p,setsar=1"
+                f"pad={size}:{size}:(ow-iw)/2:(oh-ih)/2:color=black"
             )
         else:
-            video_filter = (
+            framing_filter = (
                 "scale=iw:ih:in_range=pc:out_range=tv,"
-                "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p,setsar=1"
+                "pad=ceil(iw/2)*2:ceil(ih/2)*2"
             )
+        if video.interpolation == VideoInterpolation.CROSSFADE:
+            smoothing_filter = (
+                f",framerate=fps={video.output_fps}:"
+                "interp_start=0:interp_end=255:scene=100"
+            )
+        else:
+            smoothing_filter = ""
+        video_filter = f"{framing_filter}{smoothing_filter},format=yuv420p,setsar=1"
         return [
             self.settings.ffmpeg_binary,
             "-hide_banner",
@@ -427,13 +454,15 @@ class VideoGenerationService:
             "-nostdin",
             "-y",
             "-framerate",
-            str(video.fps),
+            str(video.source_fps),
             "-start_number",
             "0",
             "-i",
             str(staging_directory / "frame_%06d.jpg"),
             "-vf",
             video_filter,
+            "-r",
+            str(video.output_fps),
             "-c:v",
             video.codec,
             "-preset",
@@ -487,7 +516,15 @@ class VideoGenerationService:
             width = int(stream["width"])
             height = int(stream["height"])
             duration = float(stream.get("duration") or payload["format"]["duration"])
-        except (KeyError, StopIteration, TypeError, ValueError, json.JSONDecodeError) as error:
+            frame_rate = float(Fraction(stream["avg_frame_rate"]))
+        except (
+            KeyError,
+            StopIteration,
+            TypeError,
+            ValueError,
+            ZeroDivisionError,
+            json.JSONDecodeError,
+        ) as error:
             raise VideoValidationError("ffprobe returned incomplete video metadata") from error
 
         first_frame = next(
@@ -518,6 +555,28 @@ class VideoGenerationService:
             )
         if duration <= 0:
             raise VideoValidationError("Video duration must be greater than zero")
+        if abs(frame_rate - video.output_fps) > 0.01:
+            raise VideoValidationError(
+                f"Video frame rate is {frame_rate:g} FPS, expected "
+                f"{video.output_fps} FPS"
+            )
+        source_frame_count = sum(
+            1
+            for frame in run.frames
+            if frame.validation_status == FrameValidationStatus.VALID
+            and frame.frame_index >= video.start_frame_index
+            and (
+                video.end_frame_index is None
+                or frame.frame_index <= video.end_frame_index
+            )
+        )
+        expected_duration = source_frame_count / video.source_fps
+        duration_tolerance = max(0.1, 2 / video.output_fps)
+        if abs(duration - expected_duration) > duration_tolerance:
+            raise VideoValidationError(
+                f"Video duration is {duration:.3f}s, expected approximately "
+                f"{expected_duration:.3f}s"
+            )
         return VideoMetadata(
             width=width,
             height=height,

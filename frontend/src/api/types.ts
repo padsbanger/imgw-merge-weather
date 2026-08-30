@@ -40,7 +40,6 @@ export interface RunProgress {
 export interface ForecastFrame {
   frame_index: number
   forecast_time: string
-  frame_url: string
   source_url: string
   width: number | null
   height: number | null
@@ -89,6 +88,8 @@ export interface RefreshAcceptedResponse {
 
 export type VideoGenerationStatus = 'pending' | 'rendering' | 'completed' | 'failed'
 export type VideoMode = 'source' | '1:1'
+export type VideoInterpolation = 'none' | 'crossfade' | 'motion'
+export type VideoSmoothing = 'none' | 'crossfade'
 
 export interface VideoGeneration {
   video_id: string
@@ -97,7 +98,9 @@ export interface VideoGeneration {
   updated_at: string
   status: VideoGenerationStatus
   mode: VideoMode
-  fps: number
+  source_fps: number
+  output_fps: number
+  interpolation: VideoInterpolation
   codec: string
   crf: number
   preset: string
@@ -121,7 +124,9 @@ export interface VideoGenerationListResponse {
 
 export interface VideoCreateRequest {
   mode: VideoMode
-  fps: number
+  source_fps: number
+  output_fps: number
+  interpolation: VideoSmoothing
   start_frame_index: number
   end_frame_index: number
   timestamp_overlay: boolean

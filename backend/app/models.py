@@ -37,6 +37,18 @@ class VideoMode(StrEnum):
     SQUARE = "1:1"
 
 
+class VideoInterpolation(StrEnum):
+    NONE = "none"
+    CROSSFADE = "crossfade"
+    # Read compatibility for videos recorded before motion smoothing was removed.
+    MOTION = "motion"
+
+
+class VideoSmoothing(StrEnum):
+    NONE = "none"
+    CROSSFADE = "crossfade"
+
+
 class ForecastFrame(BaseModel):
     frame_index: int = Field(ge=0)
     forecast_time: datetime
@@ -104,7 +116,9 @@ class VideoGeneration(BaseModel):
     updated_at: datetime
     status: VideoGenerationStatus = VideoGenerationStatus.PENDING
     mode: VideoMode
-    fps: int = Field(ge=1, le=30)
+    source_fps: int = Field(ge=1, le=10)
+    output_fps: int = Field(ge=15, le=60)
+    interpolation: VideoInterpolation
     codec: str = "libx264"
     crf: int = Field(ge=0, le=51)
     preset: str

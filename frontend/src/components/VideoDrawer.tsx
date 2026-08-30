@@ -7,7 +7,9 @@ import type {
   ForecastRunDetail,
   VideoCreateRequest,
   VideoGeneration,
+  VideoInterpolation,
   VideoMode,
+  VideoSmoothing,
 } from '../api/types'
 import { formatLocalDate, formatLocalTime, formatUtcTime } from '../utils/time'
 
@@ -25,7 +27,10 @@ export function VideoDrawer({ run, open, onClose }: VideoDrawerProps) {
   )
   const [startFrameIndex, setStartFrameIndex] = useState(frameIndices[0] ?? 0)
   const [endFrameIndex, setEndFrameIndex] = useState(frameIndices.at(-1) ?? 0)
-  const [fps, setFps] = useState(5)
+  const [sourceFps, setSourceFps] = useState(3)
+  const [outputFps, setOutputFps] = useState(30)
+  const [interpolation, setInterpolation] =
+    useState<VideoSmoothing>('crossfade')
   const [mode, setMode] = useState<VideoMode>('source')
   const [timestampOverlay, setTimestampOverlay] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
@@ -57,16 +62,28 @@ export function VideoDrawer({ run, open, onClose }: VideoDrawerProps) {
   if (!open) return null
 
   const rangeValid = startFrameIndex <= endFrameIndex
-  const fpsValid = Number.isInteger(fps) && fps >= 1 && fps <= 30
+  const outputFpsValid =
+    Number.isInteger(outputFps) && outputFps >= 15 && outputFps <= 60
+  const selectedFrameCount = run.frames.filter(
+    (frame) =>
+      frame.validation_status === 'valid' &&
+      frame.frame_index >= startFrameIndex &&
+      frame.frame_index <= endFrameIndex,
+  ).length
   const canGenerate =
-    run.status === 'completed' && frameIndices.length > 0 && rangeValid && fpsValid
+    run.status === 'completed' &&
+    selectedFrameCount > 0 &&
+    rangeValid &&
+    outputFpsValid
 
   function submitVideo(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!canGenerate) return
     createMutation.mutate({
       mode,
-      fps,
+      source_fps: sourceFps,
+      output_fps: outputFps,
+      interpolation,
       start_frame_index: startFrameIndex,
       end_frame_index: endFrameIndex,
       timestamp_overlay: timestampOverlay,
@@ -142,7 +159,8 @@ export function VideoDrawer({ run, open, onClose }: VideoDrawerProps) {
                 {run.frames.map((frame) => (
                   <option key={frame.frame_index} value={frame.frame_index}>
                     {formatLocalTime(frame.forecast_time, run.display_timezone)} ·{' '}
-                    {formatUtcTime(frame.forecast_time)}
+                    {formatUtcTime(frame.forecast_time)} ·{' '}
+                    {formatRangeOffset(frame.forecast_time, run.resolved_start_time)}
                   </option>
                 ))}
               </select>
@@ -157,36 +175,90 @@ export function VideoDrawer({ run, open, onClose }: VideoDrawerProps) {
                 {run.frames.map((frame) => (
                   <option key={frame.frame_index} value={frame.frame_index}>
                     {formatLocalTime(frame.forecast_time, run.display_timezone)} ·{' '}
-                    {formatUtcTime(frame.forecast_time)}
+                    {formatUtcTime(frame.forecast_time)} ·{' '}
+                    {formatRangeOffset(frame.forecast_time, run.resolved_start_time)}
                   </option>
                 ))}
               </select>
             </label>
           </div>
           {!rangeValid ? <p className="video-form-error">Range end precedes its start.</p> : null}
-          {!fpsValid ? <p className="video-form-error">FPS must be from 1 to 30.</p> : null}
+          {!outputFpsValid ? (
+            <p className="video-form-error">Output FPS must be from 15 to 60.</p>
+          ) : null}
 
-          <div className="video-options-row">
-            <label>
-              <span>FPS</span>
-              <input
-                aria-label="Video FPS"
-                type="number"
-                min="1"
-                max="30"
-                value={fps}
-                onChange={(event) => setFps(Number(event.currentTarget.value))}
-              />
-            </label>
-            <label className="video-checkbox">
-              <input
-                type="checkbox"
-                checked={timestampOverlay}
-                onChange={(event) => setTimestampOverlay(event.currentTarget.checked)}
-              />
-              Timestamp overlay
-            </label>
-          </div>
+          <fieldset className="video-speed-options">
+            <legend>Animation speed</legend>
+            {([
+              ['Slow', 2],
+              ['Normal', 3],
+              ['Fast', 5],
+            ] as const).map(([label, value]) => (
+              <label key={label} className={sourceFps === value ? 'selected' : ''}>
+                <input
+                  type="radio"
+                  name="animation-speed"
+                  value={value}
+                  checked={sourceFps === value}
+                  onChange={() => setSourceFps(value)}
+                />
+                <strong>{label}</strong>
+                <small>{value} frames/s</small>
+              </label>
+            ))}
+          </fieldset>
+
+          <fieldset className="video-smoothing-options">
+            <legend>Motion smoothing</legend>
+            <SmoothingOption
+              value="none"
+              label="None"
+              description="Uses only original IMGW frames."
+              selected={interpolation}
+              onSelect={setInterpolation}
+            />
+            <SmoothingOption
+              value="crossfade"
+              label="Crossfade"
+              description="Smoothly blends between consecutive IMGW frames."
+              selected={interpolation}
+              onSelect={setInterpolation}
+            />
+          </fieldset>
+
+          <p className="video-interpolation-note">
+            Interpolated frames are visual smoothing only. IMGW source data remains at
+            10-minute intervals.
+          </p>
+
+          <p className="video-duration-estimate">
+            Estimated duration <strong>{estimateDuration(selectedFrameCount, sourceFps)}</strong>
+          </p>
+
+          <details className="video-advanced-settings">
+            <summary>Advanced settings</summary>
+            <div className="video-options-row">
+              <label>
+                <span>OUTPUT FPS</span>
+                <input
+                  aria-label="Output FPS"
+                  type="number"
+                  min="15"
+                  max="60"
+                  value={outputFps}
+                  onChange={(event) => setOutputFps(Number(event.currentTarget.value))}
+                />
+              </label>
+              <label className="video-checkbox">
+                <input
+                  type="checkbox"
+                  checked={timestampOverlay}
+                  onChange={(event) => setTimestampOverlay(event.currentTarget.checked)}
+                />
+                Timestamp overlay
+              </label>
+            </div>
+          </details>
 
           {createMutation.isError ? (
             <p className="video-form-error" role="alert">
@@ -227,6 +299,8 @@ export function VideoDrawer({ run, open, onClose }: VideoDrawerProps) {
               video={video}
               timeZone={run.display_timezone}
               rangeLabel={formatVideoRange(video, run)}
+              sourceFrameCount={sourceFrameCountForVideo(video, run)}
+              weatherIntervalMinutes={run.interval_minutes}
               confirmDelete={confirmDeleteId === video.video_id}
               deleting={deleteMutation.isPending && confirmDeleteId === video.video_id}
               onAskDelete={() => setConfirmDeleteId(video.video_id)}
@@ -244,6 +318,8 @@ interface VideoOutputProps {
   video: VideoGeneration
   timeZone: string
   rangeLabel: string
+  sourceFrameCount: number
+  weatherIntervalMinutes: number
   confirmDelete: boolean
   deleting: boolean
   onAskDelete: () => void
@@ -255,6 +331,8 @@ function VideoOutput({
   video,
   timeZone,
   rangeLabel,
+  sourceFrameCount,
+  weatherIntervalMinutes,
   confirmDelete,
   deleting,
   onAskDelete,
@@ -299,10 +377,14 @@ function VideoOutput({
             {rangeLabel}
           </dd>
         </div>
-        <div><dt>FPS</dt><dd>{video.fps}</dd></div>
+        <div><dt>Source frames</dt><dd>{sourceFrameCount}</dd></div>
+        <div><dt>Weather interval</dt><dd>{weatherIntervalMinutes} min</dd></div>
+        <div><dt>Animation speed</dt><dd>{video.source_fps} frames/s</dd></div>
+        <div><dt>Output</dt><dd>{video.output_fps} FPS</dd></div>
+        <div><dt>Smoothing</dt><dd>{formatInterpolation(video.interpolation)}</dd></div>
         <div><dt>SIZE</dt><dd>{formatBytes(video.size_bytes)}</dd></div>
         <div><dt>FRAME</dt><dd>{video.width && video.height ? `${video.width}×${video.height}` : '—'}</dd></div>
-        <div><dt>DURATION</dt><dd>{formatDuration(video.duration_seconds)}</dd></div>
+        <div><dt>DURATION</dt><dd>{formatApproxDuration(video.duration_seconds)}</dd></div>
         <div><dt>OVERLAY</dt><dd>{video.timestamp_overlay ? 'TIME' : 'OFF'}</dd></div>
       </dl>
       <div className="video-output-actions">
@@ -331,8 +413,64 @@ function formatBytes(value: number | null): string {
   return `${(value / 1_000_000).toFixed(2)} MB`
 }
 
-function formatDuration(value: number | null): string {
-  return value === null ? '—' : `${value.toFixed(1)} s`
+function estimateDuration(frameCount: number, sourceFps: number): string {
+  if (frameCount <= 0 || sourceFps <= 0) return '—'
+  return `~${(frameCount / sourceFps).toFixed(1)} s`
+}
+
+function formatApproxDuration(value: number | null): string {
+  return value === null ? '—' : `~${value.toFixed(1)} s`
+}
+
+function formatInterpolation(interpolation: VideoInterpolation): string {
+  if (interpolation === 'crossfade') return 'Crossfade'
+  if (interpolation === 'motion') return 'Legacy (removed)'
+  return 'None'
+}
+
+function sourceFrameCountForVideo(
+  video: VideoGeneration,
+  run: ForecastRunDetail,
+): number {
+  const endIndex = video.end_frame_index ?? run.frames.at(-1)?.frame_index ?? -1
+  return run.frames.filter(
+    (frame) =>
+      frame.validation_status === 'valid' &&
+      frame.frame_index >= video.start_frame_index &&
+      frame.frame_index <= endIndex,
+  ).length
+}
+
+interface SmoothingOptionProps {
+  value: VideoSmoothing
+  label: string
+  description: string
+  selected: VideoSmoothing
+  onSelect: (value: VideoSmoothing) => void
+}
+
+function SmoothingOption({
+  value,
+  label,
+  description,
+  selected,
+  onSelect,
+}: SmoothingOptionProps) {
+  return (
+    <label className={selected === value ? 'selected' : ''}>
+      <input
+        type="radio"
+        name="visual-smoothing"
+        value={value}
+        checked={selected === value}
+        onChange={() => onSelect(value)}
+      />
+      <span>
+        <strong>{label}</strong>
+        <small>{description}</small>
+      </span>
+    </label>
+  )
 }
 
 function formatVideoRange(video: VideoGeneration, run: ForecastRunDetail): string {
@@ -341,4 +479,19 @@ function formatVideoRange(video: VideoGeneration, run: ForecastRunDetail): strin
   const end = run.frames.find((frame) => frame.frame_index === endIndex)
   if (!start || !end) return `${video.start_frame_index}–${video.end_frame_index ?? 'end'}`
   return `${formatLocalTime(start.forecast_time, run.display_timezone)}–${formatLocalTime(end.forecast_time, run.display_timezone)}`
+}
+
+function formatRangeOffset(timestamp: string, currentCycle: string | null): string {
+  if (currentCycle === null) return '—'
+  const minutes = Math.round(
+    (new Date(timestamp).getTime() - new Date(currentCycle).getTime()) / 60_000,
+  )
+  if (minutes === 0) return 'NOW'
+  const sign = minutes < 0 ? '-' : '+'
+  const absoluteMinutes = Math.abs(minutes)
+  const hours = Math.floor(absoluteMinutes / 60)
+  const remainder = absoluteMinutes % 60
+  return remainder === 0
+    ? `${sign}${hours}h`
+    : `${sign}${hours}h ${remainder}m`
 }
